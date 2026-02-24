@@ -12,7 +12,7 @@ Robotrol is a Python-based control center for 6-DoF robotic arms running FluidNC
 - Profile system (Moveo, EB15_red, EB300)
 
 ## Requirements
-- Windows 11
+- OS: Windows/Linux/macOS (tested primarily on Windows)
 - Python 3.10+
 - Python packages: pyserial, pygame, Pillow, numpy, opencv-python
 
@@ -59,5 +59,6 @@ Profiles live in `Moveo.json`, `EB15_red.json`, and `EB300.json`. Use the profil
   - `python tools/smoke_checks.py`
 - Hardware validation checklist:
   - `HARDWARE_VALIDATION_CHECKLIST.md`
+
 
 
