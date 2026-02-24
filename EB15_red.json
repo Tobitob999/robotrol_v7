@@ -1,0 +1,340 @@
+{
+  "name": "EB15_red",
+  "version": 1,
+  "features": {
+    "has_endstops": false
+  },
+  "endstops": {
+    "version": 1,
+    "units": "deg",
+    "axes": {
+      "X": {
+        "min": -150.0,
+        "max": 150.0
+      },
+      "Y": {
+        "min": -150.0,
+        "max": 150.0
+      },
+      "Z": {
+        "min": -150.0,
+        "max": 150.0
+      },
+      "A": {
+        "min": -180.0,
+        "max": 180.0
+      },
+      "B": {
+        "min": -180.0,
+        "max": 180.0
+      },
+      "C": {
+        "min": -180.0,
+        "max": 180.0
+      }
+    }
+  },
+  "manual_limits": {
+    "version": 1,
+    "units": "deg",
+    "axes": {
+      "X": {
+        "min": -100.0,
+        "max": 100.0
+      },
+      "Y": {
+        "min": -100.0,
+        "max": 100.0
+      },
+      "Z": {
+        "min": -90.0,
+        "max": 90.0
+      },
+      "A": {
+        "min": -90.0,
+        "max": 90.0
+      },
+      "B": {
+        "min": -180.0,
+        "max": 180.0
+      },
+      "C": {
+        "min": -180.0,
+        "max": 180.0
+      }
+    }
+  },
+  "cam_to_base": {
+    "R": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "t": [
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "gamepad": {
+    "modes": {
+      "slow": {
+        "X": {
+          "step": 0.5,
+          "alpha": 0.25,
+          "deadzone": 0.35,
+          "speed_scale": 0.2,
+          "invert": 1
+        },
+        "Y": {
+          "step": 0.5,
+          "alpha": 0.25,
+          "deadzone": 0.35,
+          "speed_scale": 0.2,
+          "invert": 1
+        },
+        "Z": {
+          "step": 0.5,
+          "alpha": 0.25,
+          "deadzone": 0.35,
+          "speed_scale": 0.2,
+          "invert": 1
+        },
+        "A": {
+          "step": 0.5,
+          "alpha": 0.25,
+          "deadzone": 0.35,
+          "speed_scale": 0.2,
+          "invert": 1
+        },
+        "B": {
+          "step": 0.5,
+          "alpha": 0.25,
+          "deadzone": 0.35,
+          "speed_scale": 0.2,
+          "invert": 1
+        },
+        "C": {
+          "step": 0.5,
+          "alpha": 0.25,
+          "deadzone": 0.35,
+          "speed_scale": 10.0,
+          "invert": 1
+        }
+      },
+      "normal": {
+        "X": {
+          "step": 0.5,
+          "alpha": 0.25,
+          "deadzone": 0.35,
+          "speed_scale": 1.0,
+          "invert": 1
+        },
+        "Y": {
+          "step": 0.5,
+          "alpha": 0.25,
+          "deadzone": 0.35,
+          "speed_scale": 1.0,
+          "invert": 1
+        },
+        "Z": {
+          "step": 0.5,
+          "alpha": 0.25,
+          "deadzone": 0.35,
+          "speed_scale": 1.0,
+          "invert": 1
+        },
+        "A": {
+          "step": 0.5,
+          "alpha": 0.25,
+          "deadzone": 0.35,
+          "speed_scale": 1.0,
+          "invert": 1
+        },
+        "B": {
+          "step": 0.5,
+          "alpha": 0.25,
+          "deadzone": 0.35,
+          "speed_scale": 1.0,
+          "invert": 1
+        },
+        "C": {
+          "step": 0.5,
+          "alpha": 0.25,
+          "deadzone": 0.35,
+          "speed_scale": 25.0,
+          "invert": 1
+        }
+      },
+      "fast": {
+        "X": {
+          "step": 0.5,
+          "alpha": 0.25,
+          "deadzone": 0.35,
+          "speed_scale": 2.0,
+          "invert": 1
+        },
+        "Y": {
+          "step": 0.5,
+          "alpha": 0.25,
+          "deadzone": 0.35,
+          "speed_scale": 2.0,
+          "invert": 1
+        },
+        "Z": {
+          "step": 0.5,
+          "alpha": 0.25,
+          "deadzone": 0.35,
+          "speed_scale": 4.0,
+          "invert": 1
+        },
+        "A": {
+          "step": 0.5,
+          "alpha": 0.25,
+          "deadzone": 0.35,
+          "speed_scale": 5.0,
+          "invert": 1
+        },
+        "B": {
+          "step": 1.0,
+          "alpha": 0.1,
+          "deadzone": 0.25,
+          "speed_scale": 5.0,
+          "invert": 1
+        },
+        "C": {
+          "step": 0.5,
+          "alpha": 0.25,
+          "deadzone": 0.35,
+          "speed_scale": 50.0,
+          "invert": 1
+        }
+      }
+    },
+    "current_mode": "fast",
+    "button_actions": {
+      "back": "pose_to_mask_and_generate",
+      "start": "solve_and_run_tcp_sequence",
+      "dpad_up": "add_current_pose_to_queue",
+      "dpad_down": "none"
+    }
+  },
+  "dh_model": {
+    "convention": "DH",
+    "units": {
+      "length": "m",
+      "angle": "rad"
+    },
+    "joint_order": [
+      "A",
+      "X",
+      "Y",
+      "Z",
+      "B",
+      "C"
+    ],
+    "post_transform": {
+      "mirror_x": true,
+      "sim_theta_offset_deg": {
+        "A": -90.0,
+        "Z": 90.0
+      },
+      "sim_theta_scale": {
+        "B": -1.0
+      }
+    },
+    "joints": [
+      {
+        "name": "joint1_A",
+        "axis": "A",
+        "a": 0.0,
+        "alpha": 1.5707963267948966,
+        "d": 0.076,
+        "theta_offset": 0.0,
+        "q_min": -3.14159265359,
+        "q_max": 3.14159265359,
+        "source_note": "EB15 upright sim/base orientation: alpha=+90deg, d=L1, a=0."
+      },
+      {
+        "name": "joint2_X",
+        "axis": "X",
+        "a": 0.235,
+        "alpha": 0.0,
+        "d": 0.0,
+        "theta_offset": 1.5707963267948966,
+        "q_min": -3.14159265359,
+        "q_max": 3.14159265359,
+        "source_note": "EB15 upright sim/base orientation: theta_offset=+90deg, alpha=0, d=0, a=L2."
+      },
+      {
+        "name": "joint3_Y",
+        "axis": "Y",
+        "a": 0.23,
+        "alpha": 0.0,
+        "d": 0.0,
+        "theta_offset": 0.0,
+        "q_min": -3.14159265359,
+        "q_max": 3.14159265359,
+        "source_note": "EB15 upright sim/base orientation: shoulder/elbow geometry row."
+      },
+      {
+        "name": "joint4_Z",
+        "axis": "Z",
+        "a": 0.0,
+        "alpha": 1.5707963267948966,
+        "d": 0.085,
+        "theta_offset": 0.0,
+        "q_min": -3.14159265359,
+        "q_max": 3.14159265359,
+        "source_note": "EB15 upright sim/base orientation: joint order A X Y Z B C, wrist pitch Z."
+      },
+      {
+        "name": "joint5_B",
+        "axis": "B",
+        "a": 0.0,
+        "alpha": 1.5707963267948966,
+        "d": 0.076,
+        "theta_offset": 0.0,
+        "q_min": -3.14159265359,
+        "q_max": 3.14159265359,
+        "source_note": "EB15 axis remap: joint order is A X Y Z B C (this row is wrist roll B)."
+      },
+      {
+        "name": "joint6_C",
+        "axis": "C",
+        "a": 0.0,
+        "alpha": 0.0,
+        "d": 0.043,
+        "theta_offset": 0.0,
+        "q_min": -3.14159265359,
+        "q_max": 3.14159265359,
+        "source_note": "Set per provided DH table: theta=0, alpha=0, d=L4, a=0."
+      }
+    ]
+  },
+  "manual_zero_reference": {
+    "source": "manual_zero",
+    "profile": "EB15_red",
+    "pre_g92_machine_pose": {
+      "X": -2.198,
+      "Y": 7.934,
+      "Z": 10.371,
+      "A": -14.115,
+      "B": 80.719,
+      "C": -14.432
+    },
+    "timestamp": 1771513120.2884324
+  }
+}

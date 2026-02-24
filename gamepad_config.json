@@ -1,0 +1,143 @@
+{
+  "modes": {
+    "slow": {
+      "X": {
+        "step": 0.5,
+        "alpha": 0.25,
+        "deadzone": 0.35,
+        "speed_scale": 0.2,
+        "invert": 1
+      },
+      "Y": {
+        "step": 0.5,
+        "alpha": 0.25,
+        "deadzone": 0.35,
+        "speed_scale": 0.2,
+        "invert": 1
+      },
+      "Z": {
+        "step": 0.5,
+        "alpha": 0.25,
+        "deadzone": 0.35,
+        "speed_scale": 0.2,
+        "invert": 1
+      },
+      "A": {
+        "step": 0.5,
+        "alpha": 0.25,
+        "deadzone": 0.35,
+        "speed_scale": 0.2,
+        "invert": 1
+      },
+      "B": {
+        "step": 0.5,
+        "alpha": 0.25,
+        "deadzone": 0.35,
+        "speed_scale": 0.2,
+        "invert": 1
+      },
+      "C": {
+        "step": 0.5,
+        "alpha": 0.25,
+        "deadzone": 0.35,
+        "speed_scale": 10.0,
+        "invert": 1
+      }
+    },
+    "normal": {
+      "X": {
+        "step": 0.5,
+        "alpha": 0.25,
+        "deadzone": 0.35,
+        "speed_scale": 1.0,
+        "invert": 1
+      },
+      "Y": {
+        "step": 0.5,
+        "alpha": 0.25,
+        "deadzone": 0.35,
+        "speed_scale": 1.0,
+        "invert": 1
+      },
+      "Z": {
+        "step": 0.5,
+        "alpha": 0.25,
+        "deadzone": 0.35,
+        "speed_scale": 1.0,
+        "invert": 1
+      },
+      "A": {
+        "step": 0.5,
+        "alpha": 0.25,
+        "deadzone": 0.35,
+        "speed_scale": 1.0,
+        "invert": 1
+      },
+      "B": {
+        "step": 0.5,
+        "alpha": 0.25,
+        "deadzone": 0.35,
+        "speed_scale": 1.0,
+        "invert": 1
+      },
+      "C": {
+        "step": 0.5,
+        "alpha": 0.25,
+        "deadzone": 0.35,
+        "speed_scale": 25.0,
+        "invert": 1
+      }
+    },
+    "fast": {
+      "X": {
+        "step": 0.5,
+        "alpha": 0.25,
+        "deadzone": 0.35,
+        "speed_scale": 2.0,
+        "invert": 1
+      },
+      "Y": {
+        "step": 0.5,
+        "alpha": 0.25,
+        "deadzone": 0.35,
+        "speed_scale": 2.0,
+        "invert": 1
+      },
+      "Z": {
+        "step": 0.5,
+        "alpha": 0.25,
+        "deadzone": 0.35,
+        "speed_scale": 4.0,
+        "invert": 1
+      },
+      "A": {
+        "step": 0.5,
+        "alpha": 0.25,
+        "deadzone": 0.35,
+        "speed_scale": 5.0,
+        "invert": 1
+      },
+      "B": {
+        "step": 1.0,
+        "alpha": 0.1,
+        "deadzone": 0.25,
+        "speed_scale": 5.0,
+        "invert": 1
+      },
+      "C": {
+        "step": 0.5,
+        "alpha": 0.25,
+        "deadzone": 0.35,
+        "speed_scale": 50.0,
+        "invert": 1
+      }
+    }
+  },
+  "current_mode": "fast",
+  "button_actions": {
+    "back": "pose_to_mask_and_generate",
+    "start": "solve_and_run_tcp_sequence",
+    "dpad_up": "add_current_pose_to_queue",
+    "dpad_down": "none"
+  }
+}

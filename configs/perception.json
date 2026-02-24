@@ -1,0 +1,10 @@
+﻿{
+  "mode": "tnt",
+  "min_confidence": 0.8,
+  "max_reprojection_error_px": 2.0,
+  "mock_pose": {
+    "position_mm": [200.0, 0.0, 50.0],
+    "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0],
+    "confidence": 0.99
+  }
+}

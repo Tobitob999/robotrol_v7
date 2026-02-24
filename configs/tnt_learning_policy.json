@@ -1,0 +1,31 @@
+{
+  "version": 2,
+  "epsilon": 0.25,
+  "best_reward": -1000000000.0,
+  "last_reward": 0.0,
+  "failure_streak": 0,
+  "stats": {
+    "attempts": 0,
+    "successes": 0
+  },
+  "params": {
+    "grasp_offset_mm": 0.0,
+    "approach_distance_mm": 50.0,
+    "lift_distance_mm": 80.0,
+    "approach_speed": 60.0,
+    "grasp_speed": 30.0,
+    "close_force": 1.0,
+    "min_confidence": 0.8,
+    "min_area_px": 500
+  },
+  "stable_params": {
+    "grasp_offset_mm": 0.0,
+    "approach_distance_mm": 50.0,
+    "lift_distance_mm": 80.0,
+    "approach_speed": 60.0,
+    "grasp_speed": 30.0,
+    "close_force": 1.0,
+    "min_confidence": 0.8,
+    "min_area_px": 500
+  }
+}
