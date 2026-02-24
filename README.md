@@ -25,7 +25,7 @@ python Robotrol_FluidNC_v7_0.py
 Profiles live in `Moveo.json`, `EB15_red.json`, and `EB300.json`. Use the profile selector in the UI to switch.
 
 ## Repo layout
-- `Robotrol_FluidNC_v7_0.py` main UI core (window title: V7.0)
+- `Robotrol_FluidNC_v7_0.py` main UI core (window title: V7.1)
 - `Robotrol_FluidNC_v7_0_launcher.py` optional compatibility launcher entrypoint
 - `config_profiles.py` profile loader
 - `Moveo.json`, `EB15_red.json`, `EB300.json` profiles

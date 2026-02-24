@@ -1,5 +1,5 @@
 # ============================================================================================
-# 34 Robotrol V7.0
+# 34 Robotrol V7.1
 # Full G-code control center with queue, gamepad, kinematics, vision, and OTA
 # ============================================================================================
 # Compatible with:
@@ -528,7 +528,7 @@ class SerialClient:
 # GUI Rahmen
 # =========================
 root = tk.Tk()
-root.title("Robotrol V7.0")
+root.title("Robotrol V7.1")
 root.geometry("1150x1000")
 
 style = ttk.Style()
@@ -1030,7 +1030,7 @@ class ExecuteApp(ttk.Frame):
         pos_tabs.add(tab_fixed_tcp, text="Fixed TCP")
 
         tab_pickplace = ttk.Frame(pos_tabs)
-        pos_tabs.add(tab_pickplace, text="Pick&Place")
+        pos_tabs.add(tab_pickplace, text="Pick & Place")
         try:
             self.pickplace_tab = PickPlaceTab(
                 tab_pickplace,
@@ -1040,7 +1040,7 @@ class ExecuteApp(ttk.Frame):
             )
             self.pickplace_tab.pack(fill="both", expand=True)
         except Exception as e:
-            ttk.Label(tab_pickplace, text=f"Pick&Place init failed: {e}").pack(anchor="w", padx=6, pady=6)
+            ttk.Label(tab_pickplace, text=f"Pick & Place init failed: {e}").pack(anchor="w", padx=6, pady=6)
 
         self.fixed_tcp_enabled = tk.BooleanVar(value=False)
         self.fixed_tcp_roll = tk.DoubleVar(value=0.0)
@@ -2073,7 +2073,7 @@ class ExecuteApp(ttk.Frame):
 
         # --- Tab: Plane G2/G3 ---
         tab_plane = ttk.Frame(pos_tabs)
-        pos_tabs.add(tab_plane, text="Plane G2/G3")
+        pos_tabs.add(tab_plane, text="GCODE")
 
         self.plane_model = {
             "origin": (0.0, 0.0, 0.0),
@@ -2108,6 +2108,22 @@ class ExecuteApp(ttk.Frame):
         self.plane_w = tk.DoubleVar(value=0.0)
         self.plane_feed = tk.DoubleVar(value=3000.0)
         self.plane_seg_len = tk.DoubleVar(value=2.0)
+        # G-code file interpreter state
+        self.plane_gcode_lines = []
+        self.plane_gcode_path = tk.StringVar(value="")
+        self.plane_gcode_status = tk.StringVar(value="No file loaded.")
+        self.plane_gcode_progress = tk.StringVar(value="")
+        self.plane_scale_x = tk.DoubleVar(value=1.0)
+        self.plane_scale_y = tk.DoubleVar(value=1.0)
+        self.plane_mirror_x = tk.BooleanVar(value=False)
+        self.plane_mirror_y = tk.BooleanVar(value=False)
+        self.plane_rotate = tk.StringVar(value="0°")
+        self.plane_offset_u = tk.DoubleVar(value=0.0)
+        self.plane_offset_v = tk.DoubleVar(value=0.0)
+        self.plane_dry_run = tk.BooleanVar(value=True)
+        self.plane_gcode_worker = None
+        self.plane_gcode_stop_event = threading.Event()
+        self.plane_preview_canvas = None
 
         def _plane_log(msg):
             if hasattr(self, "log"):
@@ -2588,6 +2604,385 @@ class ExecuteApp(ttk.Frame):
                 count += 1
             _plane_log(f"Plane arc queued: {count}/{len(pts)} segments.")
 
+        # ---- G-code file interpreter ----
+
+        def _plane_parse_line(raw):
+            line = raw
+            if ";" in line:
+                line = line[:line.index(";")]
+            line = line.strip().upper()
+            if not line:
+                return None
+            tokens = line.split()
+            if not tokens:
+                return None
+            cmd = tokens[0]
+            params = {}
+            for tok in tokens[1:]:
+                if len(tok) >= 2 and tok[0].isalpha():
+                    try:
+                        params[tok[0]] = float(tok[1:])
+                    except ValueError:
+                        pass
+            return {"cmd": cmd, "params": params}
+
+        def _plane_exec_gcode(dry_run):
+            lines = self.plane_gcode_lines
+            if not lines:
+                _plane_log("G-code: no file loaded.")
+                return
+            if not self.plane_defined:
+                _plane_log("G-code: plane not defined. Set plane from TCP first.")
+                return
+            if not dry_run and not hasattr(self, "kinematics_tabs"):
+                _plane_log("G-code: kinematics not available.")
+                return
+            origin = _plane_get_origin()
+            u_axis, v_axis, n_axis = _plane_sync_axes()
+            roll, pitch, yaw = _plane_get_rpy()
+            scale_x = max(1e-6, float(self.plane_scale_x.get()))
+            scale_y = max(1e-6, float(self.plane_scale_y.get()))
+            _mx = -1.0 if self.plane_mirror_x.get() else 1.0
+            _my = -1.0 if self.plane_mirror_y.get() else 1.0
+            _rot = self.plane_rotate.get()
+            off_u = float(self.plane_offset_u.get())
+            off_v = float(self.plane_offset_v.get())
+            seg_len = max(0.5, float(self.plane_seg_len.get()))
+            stop = self.plane_gcode_stop_event
+            # interpreter state
+            abs_mode = True
+            metric = True
+            cur_u = 0.0
+            cur_v = 0.0
+            cur_w = 0.0
+            cur_feed = float(self.plane_feed.get())
+            move_count = 0
+            total = len(lines)
+
+            def _transform_uv(rx, ry):
+                """Scale + mirror + rotate (no offset). None means axis not specified."""
+                ff = 25.4 if not metric else 1.0
+                u_r = rx * ff * scale_x * _mx if rx is not None else None
+                v_r = ry * ff * scale_y * _my if ry is not None else None
+                if u_r is not None and v_r is not None and _rot != "0°":
+                    if _rot == "90°":    u_r, v_r = -v_r, u_r
+                    elif _rot == "180°": u_r, v_r = -u_r, -v_r
+                    elif _rot == "270°": u_r, v_r = v_r, -u_r
+                return u_r, v_r
+
+            def to_uv(rx, ry, rz):
+                u_t, v_t = _transform_uv(rx, ry)
+                ff = 25.4 if not metric else 1.0
+                u = u_t + off_u if u_t is not None else None
+                v = v_t + off_v if v_t is not None else None
+                w = rz * ff * (scale_x + scale_y) * 0.5 if rz is not None else None
+                return u, v, w
+
+            def world_xyz(uu, vv, ww):
+                x = origin[0] + uu * u_axis[0] + vv * v_axis[0] + ww * n_axis[0]
+                y = origin[1] + uu * u_axis[1] + vv * v_axis[1] + ww * n_axis[1]
+                z = origin[2] + uu * u_axis[2] + vv * v_axis[2] + ww * n_axis[2]
+                return x, y, z
+
+            def do_move(u1, v1, w1, feed):
+                nonlocal cur_u, cur_v, cur_w, move_count
+                if u1 is None: u1 = cur_u
+                if v1 is None: v1 = cur_v
+                if w1 is None: w1 = cur_w
+                if not dry_run:
+                    wx, wy, wz = world_xyz(u1, v1, w1)
+                    ok = self.kinematics_tabs.move_tcp_pose(wx, wy, wz, roll, pitch, yaw, feed=feed)
+                    if not ok:
+                        return False
+                move_count += 1
+                cur_u, cur_v, cur_w = u1, v1, w1
+                return True
+
+            def do_arc(u1, v1, w1, ci, cj, direction, feed):
+                nonlocal cur_u, cur_v, cur_w, move_count
+                if u1 is None: u1 = cur_u
+                if v1 is None: v1 = cur_v
+                if w1 is None: w1 = cur_w
+                cx = cur_u + ci
+                cy = cur_v + cj
+                r0 = math.hypot(cur_u - cx, cur_v - cy)
+                r1 = math.hypot(u1 - cx, v1 - cy)
+                if r0 < 1e-6:
+                    _plane_log(f"G-code arc: radius too small, skipped.")
+                    cur_u, cur_v, cur_w = u1, v1, w1
+                    return True
+                if abs(r0 - r1) > 0.5:
+                    _plane_log(f"G-code arc: radius mismatch r0={r0:.3f} r1={r1:.3f}, skipped.")
+                    cur_u, cur_v, cur_w = u1, v1, w1
+                    return True
+                start_a = math.atan2(cur_v - cy, cur_u - cx)
+                end_a = math.atan2(v1 - cy, u1 - cx)
+                if abs(u1 - cur_u) < 1e-6 and abs(v1 - cur_v) < 1e-6:
+                    delta = -2 * math.pi if direction == "G2" else 2 * math.pi
+                else:
+                    delta = end_a - start_a
+                    if direction == "G2":
+                        if delta >= 0: delta -= 2 * math.pi
+                    else:
+                        if delta <= 0: delta += 2 * math.pi
+                arc_len = abs(delta) * r0
+                steps = max(3, int(math.ceil(arc_len / seg_len)))
+                for i in range(1, steps + 1):
+                    if stop.is_set():
+                        return False
+                    ang = start_a + delta * (i / steps)
+                    uu = cx + r0 * math.cos(ang)
+                    vv = cy + r0 * math.sin(ang)
+                    if not dry_run:
+                        wx, wy, wz = world_xyz(uu, vv, w1)
+                        ok = self.kinematics_tabs.move_tcp_pose(wx, wy, wz, roll, pitch, yaw, feed=feed)
+                        if not ok:
+                            return False
+                    move_count += 1
+                cur_u, cur_v, cur_w = u1, v1, w1
+                return True
+
+            for lineno, raw in enumerate(lines, 1):
+                if stop.is_set():
+                    _plane_log(f"G-code stopped at line {lineno}.")
+                    break
+                parsed = _plane_parse_line(raw)
+                if not parsed:
+                    continue
+                cmd = parsed["cmd"]
+                p = parsed["params"]
+                if lineno % 100 == 0 or lineno == total:
+                    self.plane_gcode_progress.set(f"Line {lineno}/{total}  moves={move_count}")
+                if cmd == "G20":
+                    metric = False
+                elif cmd == "G21":
+                    metric = True
+                elif cmd == "G90":
+                    abs_mode = True
+                elif cmd == "G91":
+                    abs_mode = False
+                elif cmd in ("G17", "G18", "G19", "G28", "G92"):
+                    pass  # plane select / home / set position: ignored
+                elif cmd in ("G0", "G1"):
+                    if "F" in p:
+                        cur_feed = p["F"] * (25.4 if not metric else 1.0)
+                    u1, v1, w1 = to_uv(p.get("X"), p.get("Y"), p.get("Z"))
+                    if not abs_mode:
+                        if u1 is not None: u1 += cur_u
+                        if v1 is not None: v1 += cur_v
+                        if w1 is not None: w1 += cur_w
+                    feed = cur_feed if cmd == "G1" else min(cur_feed, 6000.0)
+                    if not do_move(u1, v1, w1, feed):
+                        _plane_log(f"G-code aborted at line {lineno} (move failed).")
+                        break
+                elif cmd in ("G2", "G3"):
+                    if "F" in p:
+                        cur_feed = p["F"] * (25.4 if not metric else 1.0)
+                    ci_t, cj_t = _transform_uv(p.get("I", 0.0), p.get("J", 0.0))
+                    ci = ci_t if ci_t is not None else 0.0
+                    cj = cj_t if cj_t is not None else 0.0
+                    u1, v1, w1 = to_uv(p.get("X"), p.get("Y"), p.get("Z"))
+                    if not abs_mode:
+                        if u1 is not None: u1 += cur_u
+                        if v1 is not None: v1 += cur_v
+                    if not do_arc(u1, v1, w1, ci, cj, cmd, cur_feed):
+                        _plane_log(f"G-code aborted at line {lineno} (arc failed).")
+                        break
+                # M, T, S, N, E: silently ignored
+            self.plane_gcode_progress.set(f"Done — {move_count} moves / {total} lines")
+            _plane_log(f"G-code {'dry-run' if dry_run else 'run'} complete: {move_count} moves.")
+
+        def _plane_gcode_load():
+            import tkinter.filedialog as fd
+            path = fd.askopenfilename(
+                title="Load G-code file",
+                filetypes=[("G-code", "*.gcode *.nc *.gc *.txt"), ("All files", "*.*")],
+            )
+            if not path:
+                return
+            try:
+                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                    self.plane_gcode_lines = [ln.rstrip("\n") for ln in f]
+                self.plane_gcode_path.set(path)
+                self.plane_gcode_status.set(f"{len(self.plane_gcode_lines)} lines loaded.")
+                self.plane_gcode_progress.set("")
+                _plane_log(f"G-code loaded: {path} ({len(self.plane_gcode_lines)} lines)")
+            except Exception as e:
+                _plane_log(f"G-code load failed: {e}")
+
+        def _plane_gcode_run():
+            if self.plane_gcode_worker and self.plane_gcode_worker.is_alive():
+                _plane_log("G-code: already running.")
+                return
+            self.plane_gcode_stop_event.clear()
+            self.plane_gcode_progress.set("Starting…")
+            import threading as _t
+            self.plane_gcode_worker = _t.Thread(
+                target=_plane_exec_gcode,
+                args=(bool(self.plane_dry_run.get()),),
+                daemon=True,
+            )
+            self.plane_gcode_worker.start()
+
+        def _plane_gcode_stop():
+            self.plane_gcode_stop_event.set()
+            _plane_log("G-code stop requested.")
+
+        def _plane_gcode_preview():
+            """Parse loaded G-code and draw the UV path on the preview canvas."""
+            lines = self.plane_gcode_lines
+            canvas = self.plane_preview_canvas
+            if canvas is None:
+                return
+            if not lines:
+                canvas.delete("all")
+                canvas.create_text(150, 100, text="No file loaded.", fill="gray")
+                return
+
+            scale_x = max(1e-6, float(self.plane_scale_x.get()))
+            scale_y = max(1e-6, float(self.plane_scale_y.get()))
+            _mx = -1.0 if self.plane_mirror_x.get() else 1.0
+            _my = -1.0 if self.plane_mirror_y.get() else 1.0
+            _rot = self.plane_rotate.get()
+            off_u = float(self.plane_offset_u.get())
+            off_v = float(self.plane_offset_v.get())
+            seg_len = max(0.5, float(self.plane_seg_len.get()))
+            metric = True
+            abs_mode = True
+            cur_u = 0.0
+            cur_v = 0.0
+
+            def _txuv(rx, ry):
+                ff = 25.4 if not metric else 1.0
+                u_r = rx * ff * scale_x * _mx if rx is not None else None
+                v_r = ry * ff * scale_y * _my if ry is not None else None
+                if u_r is not None and v_r is not None and _rot != "0°":
+                    if _rot == "90°":    u_r, v_r = -v_r, u_r
+                    elif _rot == "180°": u_r, v_r = -u_r, -v_r
+                    elif _rot == "270°": u_r, v_r = v_r, -u_r
+                return u_r, v_r
+
+            def tuv(rx, ry):
+                u_t, v_t = _txuv(rx, ry)
+                u = u_t + off_u if u_t is not None else None
+                v = v_t + off_v if v_t is not None else None
+                return u, v
+
+            draw_segs = []  # (u0, v0, u1, v1, is_rapid)
+
+            for raw in lines:
+                parsed = _plane_parse_line(raw)
+                if not parsed:
+                    continue
+                cmd = parsed["cmd"]
+                p = parsed["params"]
+                if cmd == "G20":   metric = False
+                elif cmd == "G21": metric = True
+                elif cmd == "G90": abs_mode = True
+                elif cmd == "G91": abs_mode = False
+                elif cmd in ("G0", "G1"):
+                    u1, v1 = tuv(p.get("X"), p.get("Y"))
+                    if not abs_mode:
+                        if u1 is not None: u1 += cur_u
+                        if v1 is not None: v1 += cur_v
+                    if u1 is None: u1 = cur_u
+                    if v1 is None: v1 = cur_v
+                    draw_segs.append((cur_u, cur_v, u1, v1, cmd == "G0"))
+                    cur_u, cur_v = u1, v1
+                elif cmd in ("G2", "G3"):
+                    ci_t, cj_t = _txuv(p.get("I", 0.0), p.get("J", 0.0))
+                    ci = ci_t if ci_t is not None else 0.0
+                    cj = cj_t if cj_t is not None else 0.0
+                    u1, v1 = tuv(p.get("X"), p.get("Y"))
+                    if not abs_mode:
+                        if u1 is not None: u1 += cur_u
+                        if v1 is not None: v1 += cur_v
+                    if u1 is None: u1 = cur_u
+                    if v1 is None: v1 = cur_v
+                    cx = cur_u + ci
+                    cy = cur_v + cj
+                    r0 = math.hypot(cur_u - cx, cur_v - cy)
+                    if r0 < 1e-6:
+                        draw_segs.append((cur_u, cur_v, u1, v1, False))
+                        cur_u, cur_v = u1, v1
+                        continue
+                    start_a = math.atan2(cur_v - cy, cur_u - cx)
+                    end_a = math.atan2(v1 - cy, u1 - cx)
+                    if abs(u1 - cur_u) < 1e-6 and abs(v1 - cur_v) < 1e-6:
+                        delta = -2 * math.pi if cmd == "G2" else 2 * math.pi
+                    else:
+                        delta = end_a - start_a
+                        if cmd == "G2":
+                            if delta >= 0: delta -= 2 * math.pi
+                        else:
+                            if delta <= 0: delta += 2 * math.pi
+                    steps = max(3, int(math.ceil(abs(delta) * r0 / seg_len)))
+                    prev_u, prev_v = cur_u, cur_v
+                    for i in range(1, steps + 1):
+                        ang = start_a + delta * (i / steps)
+                        uu = cx + r0 * math.cos(ang)
+                        vv = cy + r0 * math.sin(ang)
+                        draw_segs.append((prev_u, prev_v, uu, vv, False))
+                        prev_u, prev_v = uu, vv
+                    cur_u, cur_v = u1, v1
+
+            if not draw_segs:
+                canvas.delete("all")
+                canvas.create_text(150, 100, text="No drawable moves found.", fill="gray")
+                return
+
+            all_u = [s[0] for s in draw_segs] + [s[2] for s in draw_segs]
+            all_v = [s[1] for s in draw_segs] + [s[3] for s in draw_segs]
+            min_u, max_u = min(all_u), max(all_u)
+            min_v, max_v = min(all_v), max(all_v)
+            cw = canvas.winfo_width() or 300
+            ch = canvas.winfo_height() or 260
+            pad = 14
+            w = cw - 2 * pad
+            h = ch - 2 * pad
+            du = max_u - min_u or 1.0
+            dv = max_v - min_v or 1.0
+            sc = min(w / du, h / dv)
+
+            def _cx(u): return pad + (u - min_u) * sc
+            def _cy(v): return pad + h - (v - min_v) * sc  # flip Y (G-code Y up → canvas Y down)
+
+            canvas.delete("all")
+            canvas.create_rectangle(pad - 1, pad - 1, pad + w + 1, pad + h + 1, outline="#ddd")
+            for u0, v0, u1, v1, rapid in draw_segs:
+                x0, y0 = _cx(u0), _cy(v0)
+                x1, y1 = _cx(u1), _cy(v1)
+                if rapid:
+                    canvas.create_line(x0, y0, x1, y1, fill="#c0c0c0", dash=(4, 3))
+                else:
+                    canvas.create_line(x0, y0, x1, y1, fill="#1a5fb4", width=1)
+            # mark G-code origin
+            ox, oy = _cx(off_u), _cy(off_v)
+            canvas.create_oval(ox - 3, oy - 3, ox + 3, oy + 3, fill="#e01b24", outline="")
+            canvas.create_text(
+                cw // 2, ch - 4,
+                text=f"UV extent  {du:.1f} × {dv:.1f} mm",
+                fill="#555", font=("TkDefaultFont", 8),
+            )
+
+        def _plane_show_help():
+            import tkinter.scrolledtext as _st
+            top = tk.Toplevel()
+            top.title("GCODE Tab – Help")
+            top.geometry("620x520")
+            txt = _st.ScrolledText(top, wrap=tk.WORD, font=("Consolas", 10))
+            txt.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+            help_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "GCODE_help.txt")
+            try:
+                with open(help_path, "r", encoding="utf-8") as _f:
+                    content = _f.read()
+            except Exception as e:
+                content = f"Help file not found.\nExpected: {help_path}\n\n{e}"
+            txt.insert("1.0", content)
+            txt.config(state=tk.DISABLED)
+
+        # ---- end G-code interpreter ----
+
         plane_wrap = ttk.LabelFrame(tab_plane, text="Plane definition")
         plane_wrap.pack(fill=tk.X, expand=False, padx=4, pady=4)
 
@@ -2655,11 +3050,124 @@ class ExecuteApp(ttk.Frame):
             side=tk.LEFT, padx=2
         )
 
-        arc_wrap = ttk.LabelFrame(tab_plane, text="Arc in plane (G2/G3)")
-        arc_wrap.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        plane_nb = ttk.Notebook(tab_plane)
+        plane_nb.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
 
-        arc_row0 = ttk.Frame(arc_wrap)
-        arc_row0.pack(anchor="w", padx=4, pady=(2, 0))
+        # ---- Tab: G-code file ----
+        tab_gfile = ttk.Frame(plane_nb)
+        plane_nb.add(tab_gfile, text="G-code file")
+
+        file_row = ttk.Frame(tab_gfile)
+        file_row.pack(fill=tk.X, padx=4, pady=(6, 2))
+        ttk.Label(file_row, text="File:").pack(side=tk.LEFT)
+        ttk.Entry(file_row, textvariable=self.plane_gcode_path, width=30).pack(
+            side=tk.LEFT, padx=4, fill=tk.X, expand=True
+        )
+        ttk.Button(file_row, text="Browse…", command=_plane_gcode_load).pack(side=tk.LEFT)
+
+        ttk.Label(tab_gfile, textvariable=self.plane_gcode_status, foreground="gray").pack(
+            anchor="w", padx=6, pady=(0, 2)
+        )
+
+        # Horizontal split: controls (left) | preview canvas (right)
+        main_frame = ttk.Frame(tab_gfile)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=2)
+
+        left_frame = ttk.Frame(main_frame, width=268)
+        left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 4))
+        left_frame.pack_propagate(False)
+
+        right_frame = ttk.Frame(main_frame)
+        right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # --- Transform controls ---
+        tf = ttk.LabelFrame(left_frame, text="Transform")
+        tf.pack(fill=tk.X, padx=0, pady=(0, 4))
+
+        tf_r1 = ttk.Frame(tf)
+        tf_r1.pack(anchor="w", padx=4, pady=(4, 1))
+        ttk.Label(tf_r1, text="Scale X:", width=8, anchor="w").pack(side=tk.LEFT)
+        ttk.Entry(tf_r1, textvariable=self.plane_scale_x, width=6, justify="right").pack(
+            side=tk.LEFT, padx=(2, 10)
+        )
+        ttk.Label(tf_r1, text="Scale Y:", width=8, anchor="w").pack(side=tk.LEFT)
+        ttk.Entry(tf_r1, textvariable=self.plane_scale_y, width=6, justify="right").pack(
+            side=tk.LEFT, padx=(2, 0)
+        )
+
+        tf_r2 = ttk.Frame(tf)
+        tf_r2.pack(anchor="w", padx=4, pady=1)
+        ttk.Label(tf_r2, text="Origin U:", width=8, anchor="w").pack(side=tk.LEFT)
+        ttk.Entry(tf_r2, textvariable=self.plane_offset_u, width=6, justify="right").pack(
+            side=tk.LEFT, padx=(2, 10)
+        )
+        ttk.Label(tf_r2, text="Origin V:", width=8, anchor="w").pack(side=tk.LEFT)
+        ttk.Entry(tf_r2, textvariable=self.plane_offset_v, width=6, justify="right").pack(
+            side=tk.LEFT, padx=(2, 0)
+        )
+
+        tf_r3 = ttk.Frame(tf)
+        tf_r3.pack(anchor="w", padx=4, pady=1)
+        ttk.Checkbutton(tf_r3, text="Mirror X", variable=self.plane_mirror_x).pack(
+            side=tk.LEFT, padx=(0, 10)
+        )
+        ttk.Checkbutton(tf_r3, text="Mirror Y", variable=self.plane_mirror_y).pack(
+            side=tk.LEFT
+        )
+
+        tf_r4 = ttk.Frame(tf)
+        tf_r4.pack(anchor="w", padx=4, pady=1)
+        ttk.Label(tf_r4, text="Rotate:", width=8, anchor="w").pack(side=tk.LEFT)
+        ttk.Combobox(
+            tf_r4, textvariable=self.plane_rotate,
+            values=["0°", "90°", "180°", "270°"],
+            width=6, state="readonly",
+        ).pack(side=tk.LEFT, padx=(2, 0))
+
+        tf_r5 = ttk.Frame(tf)
+        tf_r5.pack(anchor="w", padx=4, pady=(1, 4))
+        ttk.Label(tf_r5, text="SegLen:", width=8, anchor="w").pack(side=tk.LEFT)
+        ttk.Entry(tf_r5, textvariable=self.plane_seg_len, width=6, justify="right").pack(
+            side=tk.LEFT, padx=(2, 10)
+        )
+        ttk.Label(tf_r5, text="Feed:", width=6, anchor="w").pack(side=tk.LEFT)
+        ttk.Entry(tf_r5, textvariable=self.plane_feed, width=6, justify="right").pack(
+            side=tk.LEFT, padx=(2, 0)
+        )
+
+        # Run controls
+        run_row = ttk.Frame(left_frame)
+        run_row.pack(anchor="w", padx=0, pady=(2, 2))
+        ttk.Checkbutton(run_row, text="Dry run", variable=self.plane_dry_run).pack(
+            side=tk.LEFT
+        )
+        ttk.Button(run_row, text="Run", command=_plane_gcode_run).pack(
+            side=tk.LEFT, padx=(8, 4)
+        )
+        ttk.Button(run_row, text="Stop", command=_plane_gcode_stop).pack(side=tk.LEFT)
+
+        ttk.Label(left_frame, textvariable=self.plane_gcode_progress, foreground="gray").pack(
+            anchor="w", padx=0, pady=(0, 4)
+        )
+
+        btn_row = ttk.Frame(left_frame)
+        btn_row.pack(anchor="w", padx=0, pady=2)
+        ttk.Button(btn_row, text="Preview", command=_plane_gcode_preview).pack(
+            side=tk.LEFT, padx=(0, 6)
+        )
+        ttk.Button(btn_row, text="Help", command=_plane_show_help).pack(side=tk.LEFT)
+
+        # --- Preview canvas ---
+        pv_canvas = tk.Canvas(right_frame, bg="white", cursor="crosshair", bd=1, relief=tk.SUNKEN)
+        pv_canvas.pack(fill=tk.BOTH, expand=True)
+        self.plane_preview_canvas = pv_canvas
+
+        # ---- Tab: Single arc ----
+        tab_arc = ttk.Frame(plane_nb)
+        plane_nb.add(tab_arc, text="Single arc")
+
+        arc_row0 = ttk.Frame(tab_arc)
+        arc_row0.pack(anchor="w", padx=4, pady=(6, 0))
         ttk.Checkbutton(
             arc_row0,
             text="Absolute UV (G90)",
@@ -2678,7 +3186,7 @@ class ExecuteApp(ttk.Frame):
             value="G3",
         ).pack(side=tk.LEFT, padx=(4, 0))
 
-        arc_row1 = ttk.Frame(arc_wrap)
+        arc_row1 = ttk.Frame(tab_arc)
         arc_row1.pack(anchor="w", padx=4, pady=2)
         ttk.Label(arc_row1, text="End U").pack(side=tk.LEFT)
         ttk.Entry(arc_row1, textvariable=self.plane_end_u, width=8, justify="right").pack(
@@ -2689,7 +3197,7 @@ class ExecuteApp(ttk.Frame):
             side=tk.LEFT, padx=(4, 0)
         )
 
-        arc_row2 = ttk.Frame(arc_wrap)
+        arc_row2 = ttk.Frame(tab_arc)
         arc_row2.pack(anchor="w", padx=4, pady=2)
         ttk.Label(arc_row2, text="Center I").pack(side=tk.LEFT)
         ttk.Entry(arc_row2, textvariable=self.plane_center_i, width=8, justify="right").pack(
@@ -2700,7 +3208,7 @@ class ExecuteApp(ttk.Frame):
             side=tk.LEFT, padx=(4, 0)
         )
 
-        arc_row3 = ttk.Frame(arc_wrap)
+        arc_row3 = ttk.Frame(tab_arc)
         arc_row3.pack(anchor="w", padx=4, pady=2)
         ttk.Label(arc_row3, text="W offset").pack(side=tk.LEFT)
         ttk.Entry(arc_row3, textvariable=self.plane_w, width=8, justify="right").pack(
@@ -2715,43 +3223,27 @@ class ExecuteApp(ttk.Frame):
             side=tk.LEFT, padx=(4, 0)
         )
 
-        arc_row4 = ttk.Frame(arc_wrap)
+        arc_row4 = ttk.Frame(tab_arc)
         arc_row4.pack(anchor="w", padx=4, pady=(4, 2))
-        ttk.Button(
-            arc_row4,
-            text="Execute arc",
-            command=_plane_arc_send,
-        ).pack(side=tk.LEFT)
-        ttk.Button(
-            arc_row4,
-            text="Queue arc",
-            command=_plane_arc_queue,
-        ).pack(side=tk.LEFT, padx=(6, 0))
-        ttk.Button(
-            arc_row4,
-            text="Queue native G2/G3",
-            command=_plane_arc_queue_native,
-        ).pack(side=tk.LEFT, padx=(6, 0))
-        ttk.Button(
-            arc_row4,
-            text="Queue 3DP G17",
-            command=_plane_queue_3dp_example_g17,
-        ).pack(side=tk.LEFT, padx=(6, 0))
-        ttk.Button(
-            arc_row4,
-            text="Queue 3DP G18",
-            command=_plane_queue_3dp_example_g18,
-        ).pack(side=tk.LEFT, padx=(6, 0))
-        ttk.Button(
-            arc_row4,
-            text="Queue 3DP G19",
-            command=_plane_queue_3dp_example_g19,
-        ).pack(side=tk.LEFT, padx=(6, 0))
-        ttk.Button(
-            arc_row4,
-            text="Queue ALL 3DP",
-            command=_plane_queue_3dp_examples_all,
-        ).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(arc_row4, text="Execute arc", command=_plane_arc_send).pack(side=tk.LEFT)
+        ttk.Button(arc_row4, text="Queue arc", command=_plane_arc_queue).pack(
+            side=tk.LEFT, padx=(6, 0)
+        )
+        ttk.Button(arc_row4, text="Queue native G2/G3", command=_plane_arc_queue_native).pack(
+            side=tk.LEFT, padx=(6, 0)
+        )
+        ttk.Button(arc_row4, text="Queue 3DP G17", command=_plane_queue_3dp_example_g17).pack(
+            side=tk.LEFT, padx=(6, 0)
+        )
+        ttk.Button(arc_row4, text="Queue 3DP G18", command=_plane_queue_3dp_example_g18).pack(
+            side=tk.LEFT, padx=(6, 0)
+        )
+        ttk.Button(arc_row4, text="Queue 3DP G19", command=_plane_queue_3dp_example_g19).pack(
+            side=tk.LEFT, padx=(6, 0)
+        )
+        ttk.Button(arc_row4, text="Queue ALL 3DP", command=_plane_queue_3dp_examples_all).pack(
+            side=tk.LEFT, padx=(6, 0)
+        )
 
         # Tab: Commands
         tab_commands = ttk.Frame(pos_tabs)
@@ -5257,4 +5749,3 @@ def on_close():
     root.destroy()
 root.protocol("WM_DELETE_WINDOW", on_close)
 root.mainloop()
-

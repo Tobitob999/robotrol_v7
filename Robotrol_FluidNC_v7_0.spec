@@ -5,7 +5,7 @@ a = Analysis(
     ['Robotrol_FluidNC_v7_0.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('configs', 'configs'), ('model', 'model'), ('data', 'data'), ('Moveo.json', '.'), ('EB15_red.json', '.'), ('EB300.json', '.'), ('gamepad_config.json', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -36,4 +36,3 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
-

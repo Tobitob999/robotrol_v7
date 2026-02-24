@@ -1,0 +1,107 @@
+GCODE Tab – Help
+================================================================================
+
+PURPOSE
+-------
+The GCODE tab lets you run a planar G-code program (e.g. from a 2D slicer or
+pen-plotter tool) on the robot arm.  The G-code coordinate system (XY) is
+mapped into a user-defined UV plane in 3D space.  The Z axis of the G-code
+is mapped onto the plane normal (pen up / pen down).
+
+Typical use cases:
+  • Pen plotting / engraving on a flat surface tilted in space
+  • Depositing adhesive or sealant along a 2D path
+  • Laser engraving on an angled workpiece
+  • Any slicer-generated toolpath that should run in a Fixed-TCP plane
+
+
+HOW TO DEFINE THE PLANE
+-----------------------
+1. Move the robot TCP to the desired plane origin (e.g. the corner of your
+   workpiece).
+2. Orient the TCP so that its X-axis points in the desired U direction and
+   its Y-axis points in the desired V direction.
+3. Click  "Set plane from current TCP"  in the Plane Definition section above.
+   The U / V / N axes and the origin are filled in automatically.
+4. Alternatively, click  "Plane = world XY"  to use the global XY plane.
+
+The Tool RPY (roll / pitch / yaw) fields define the orientation the robot
+sends to the controller for every move in the plane.  Set these once from
+the current TCP, or enter them manually.
+
+
+TRANSFORM SETTINGS
+------------------
+Scale X / Scale Y
+    Multiplies G-code coordinates before applying the offset.
+    Example: Scale X = 0.5 shrinks the X axis by half.
+    Use this if your slicer works in a different unit scale.
+
+Origin U / Origin V
+    Shifts the whole path in the plane after scaling.
+    Useful to reposition the part without editing the G-code.
+
+Mirror X / Mirror Y
+    Flips the path along the respective axis before the offset.
+    Applied before rotation.
+
+Rotate
+    Rotates the path 0° / 90° / 180° / 270° in the UV plane.
+    Rotation is applied after scale and mirror, before offset.
+
+SegLen (mm)
+    Arc discretization step length.  Arcs (G2/G3) are broken into
+    line segments of approximately this length.  Default: 2 mm.
+    Reduce for smoother curves; increase for faster execution.
+
+Feed (mm/min)
+    Default feed rate used when the G-code does not specify an F word,
+    or for G0 rapid moves (capped at 6000 mm/min).
+
+
+SUPPORTED G-CODE COMMANDS
+--------------------------
+G0   Rapid move (pen up / transit)
+G1   Linear move at feed rate (pen down / draw)
+G2   Clockwise arc (I/J center offsets from current position)
+G3   Counter-clockwise arc
+G20  Switch to inch units
+G21  Switch to mm units (default)
+G90  Absolute coordinate mode (default)
+G91  Relative (incremental) coordinate mode
+
+Silently ignored:
+G17 G18 G19   Plane select
+G28           Home
+G92           Set position
+M-commands    Temperature, fan, extruder, etc.
+T S N E       Tool, spindle, line number, extruder words
+
+Comments starting with ';' are stripped.
+
+
+WORKFLOW
+--------
+1. Define the plane (see above).
+2. Load a G-code file via  "Browse…".
+3. Adjust Transform settings (Scale, Origin, Mirror, Rotate).
+4. Click  "Preview"  to verify the toolpath shape on the canvas.
+   Blue  = draw moves (G1 / G2 / G3)
+   Gray  = rapid moves (G0)
+   Red dot = G-code coordinate origin
+5. Enable  "Dry run"  and click  "Run"  to simulate without motion.
+   Check the log output for any arc errors or aborted lines.
+6. Disable "Dry run" and click  "Run"  to execute on the robot.
+7. Click  "Stop"  at any time to abort execution.
+
+
+NOTES
+-----
+• G-code is executed in a background thread; the UI remains responsive.
+• Relative mode (G91) combined with a non-zero Origin U/V offset will
+  include the offset in every incremental delta — keep Origin U/V = 0
+  when using relative mode.
+• All Z values in the G-code are scaled by the average of Scale X and
+  Scale Y and used as W offset along the plane normal.
+  Set Z=0 for "on surface" and Z>0 for "lifted".
+• The plane must be defined before clicking Run (not required for Preview).

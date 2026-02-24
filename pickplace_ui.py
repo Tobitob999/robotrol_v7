@@ -185,12 +185,12 @@ class PickPlaceTab(ttk.Frame):
         tabs = ttk.Notebook(tab)
         tabs.grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
 
-        base_tab = ttk.Frame(tabs)
         camera_tab = ttk.Frame(tabs)
+        base_tab = ttk.Frame(tabs)
         marker_tab = ttk.Frame(tabs)
         detect_tab = ttk.Frame(tabs)
-        tabs.add(base_tab, text="Base-Cam")
         tabs.add(camera_tab, text="Camera")
+        tabs.add(base_tab, text="Base-Cam")
         tabs.add(marker_tab, text="Marker-Obj")
         tabs.add(detect_tab, text="Perception")
 
@@ -260,7 +260,7 @@ class PickPlaceTab(ttk.Frame):
         board_frame.grid(row=0, column=0, sticky="n", padx=4)
         cam_frame.grid(row=0, column=1, sticky="n", padx=4)
 
-        capture = ttk.LabelFrame(tab, text="Board -> Base (Robot TCP)")
+        capture = ttk.LabelFrame(tab, text="Board Corner Capture (TCP)")
         capture.pack(fill="x", padx=6, pady=6)
         ttk.Label(
             capture,
@@ -315,7 +315,7 @@ class PickPlaceTab(ttk.Frame):
         ttk.Button(sq_frame, text="Fit base_T_board", command=self._fit_base_T_board_from_squares).grid(
             row=0, column=4, sticky="w", padx=4, pady=2
         )
-        ttk.Label(sq_frame, text="Capture 3+ squares for best fit.").grid(row=1, column=0, columnspan=5, sticky="w", padx=4, pady=(2, 4))
+        ttk.Label(sq_frame, text="Alternative to P0/P1/P2: capture 3+ named squares (a1..h8) for a least-squares fit of base_T_board.").grid(row=1, column=0, columnspan=5, sticky="w", padx=4, pady=(2, 4))
 
         test_frame = ttk.LabelFrame(tab, text="Board Test Targets")
         test_frame.pack(fill="x", padx=6, pady=6)
@@ -338,7 +338,15 @@ class PickPlaceTab(ttk.Frame):
 
     def _build_camera_tab(self, tab):
         tab.columnconfigure(0, weight=1)
-        info = ttk.Label(tab, text="Calibrate camera intrinsics using the same chessboard pattern.")
+        info = ttk.Label(
+            tab,
+            text=(
+                "Calibrate camera intrinsics using the chessboard pattern. "
+                "Capture 10+ samples with varied board orientations and distances (minimum 5 required). "
+                "Target RMS reprojection error: < 0.5 px."
+            ),
+            wraplength=520,
+        )
         info.pack(anchor="w", padx=6, pady=(6, 2))
 
         btns = ttk.Frame(tab)
@@ -701,7 +709,15 @@ class PickPlaceTab(ttk.Frame):
             self._log(f"Save intrinsics failed: {exc}")
 
     def _build_marker_tab(self, tab):
-        info = ttk.Label(tab, text="Set marker_T_obj (marker to cube center).")
+        info = ttk.Label(
+            tab,
+            text=(
+                "Define marker_T_obj: transform from marker frame to object center. "
+                "Face axis = the cube axis that points toward the marker face. "
+                "Sign = +1 if the marker faces in the positive axis direction, -1 if negative."
+            ),
+            wraplength=520,
+        )
         info.pack(anchor="w", padx=6, pady=(6, 2))
 
         params = ttk.Frame(tab)
@@ -717,7 +733,7 @@ class PickPlaceTab(ttk.Frame):
 
         btns = ttk.Frame(tab)
         btns.pack(anchor="w", padx=6, pady=4)
-        ttk.Button(btns, text="Load marker_T_obj", command=self._load_calibration_into_ui).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btns, text="Load Config", command=self._load_calibration_into_ui).pack(side=tk.LEFT, padx=4)
         ttk.Button(btns, text="Compute marker_T_obj", command=self._compute_marker_T_obj).pack(side=tk.LEFT, padx=4)
         ttk.Button(btns, text="Save marker_T_obj", command=self._save_marker_T_obj).pack(side=tk.LEFT, padx=4)
 
@@ -739,10 +755,10 @@ class PickPlaceTab(ttk.Frame):
         ttk.Label(
             filt,
             text=(
-                "H1/H2: Rot-Hue-Bereiche (0-179). "
-                "S min/V min: Saettigung/Helligkeit Mindestwerte. "
-                "Min area: kleinste Flaeche in Pixeln. "
-                "Kernel: Morphologie-Groesse (ungerade Zahl)."
+                "H1/H2: Red hue ranges (0-179). "
+                "S min/V min: Minimum saturation/brightness. "
+                "Min area: Minimum object area in pixels. "
+                "Kernel: Morphology kernel size (odd number)."
             ),
             wraplength=520,
         ).pack(anchor="w", padx=6, pady=(4, 2))
@@ -785,51 +801,55 @@ class PickPlaceTab(ttk.Frame):
         tab.columnconfigure(0, weight=1)
         tab.rowconfigure(0, weight=1)
         text = (
-            "Setup + Calibration (v7.0) - Step by step\n"
+            "Setup + Calibration (v7.1) - Step by step\n"
             "\n"
             "A) Basic setup\n"
             "1) Connect the camera and start it in the Vision tab.\n"
             "2) Prepare the chessboard: flat, known square size (mm), board fixed.\n"
-            "3) Pattern size (cols/rows) = number of INNER corners.\n"
-            "4) In Pick&Place -> Calibration, verify all pattern parameters.\n"
+            "3) Pattern size (cols/rows) = number of INNER corners (not total squares).\n"
+            "4) Open Calibration -> Base-Cam and set the pattern parameters.\n"
             "\n"
-            "B) Camera intrinsics (once per camera)\n"
+            "B) Camera intrinsics (once per camera, redo after lens change)\n"
             "5) Open Calibration -> Camera.\n"
-            "6) Capture 10+ samples with varied board poses.\n"
-            "7) Click Compute Intrinsics.\n"
+            "6) Capture 10+ samples with varied board orientations and distances.\n"
+            "   Minimum 5 samples required; 15+ recommended for best accuracy.\n"
+            "7) Click Compute Intrinsics. Target RMS reprojection error: < 0.5 px.\n"
             "8) Click Save to camera.json.\n"
-            "9) Re-init pipeline (Init Pipeline) or restart app.\n"
+            "9) Re-init pipeline (Init Pipeline) to apply new intrinsics.\n"
             "\n"
-            "C) base_T_board (Robot -> Board)\n"
+            "C) base_T_board (Board origin expressed in Base frame)\n"
             "10) Open Calibration -> Base-Cam.\n"
-            "11) Set pattern cols/rows and square size (mm).\n"
-            "12) Move TCP to P0=(0,0) inner corner, Capture P0.\n"
-            "13) Move TCP to P1=(cols-1,0) inner corner, Capture P1.\n"
-            "14) Move TCP to P2=(0,rows-1) inner corner, Capture P2.\n"
-            "15) Compute base_T_board, then Save Board Config.\n"
+            "11) Verify pattern cols/rows and square size (mm).\n"
+            "12) Move TCP tip to P0=(0,0) inner corner, click Capture P0.\n"
+            "13) Move TCP tip to P1=(cols-1,0) inner corner, click Capture P1.\n"
+            "14) Move TCP tip to P2=(0,rows-1) inner corner, click Capture P2.\n"
+            "15) Click Compute base_T_board. Target: err_x and err_y < 2 mm.\n"
+            "16) Click Save Board Config (saves pattern params + base_T_board matrix).\n"
             "    Note: P1 defines +X, P2 defines +Y. Order must match camera view.\n"
             "\n"
-            "D) base_T_cam (Camera -> Base)\n"
-            "16) In Vision tab, keep board visible and sharp.\n"
-            "17) Click Compute base_T_cam.\n"
-            "18) Run Validate base_T_cam (target: <=3 mm and <=1.5 deg).\n"
-            "19) Run Simulate calibration (Monte Carlo, keep p95 low).\n"
-            "20) Verify matrix and Save base_T_cam (configs/transforms.json).\n"
+            "D) base_T_cam (Camera pose expressed in Base frame)\n"
+            "17) Keep the chessboard visible and sharp in the camera feed.\n"
+            "18) Click Compute base_T_cam. Target reproj_rmse: < 1.0 px.\n"
+            "19) Click Validate base_T_cam. Target: pos_err <= 3 mm, rot_err <= 1.5 deg.\n"
+            "20) Click Simulate calibration (Monte Carlo 200x, noise=0.35 px).\n"
+            "    Target: t_err p95 < 2 mm, R_err p95 < 0.5 deg.\n"
+            "21) Verify matrix and click Save base_T_cam (configs/transforms.json).\n"
             "\n"
-            "E) marker_T_obj (Marker -> Object center)\n"
-            "21) Open Calibration -> Marker-Obj.\n"
-            "22) Choose face axis and sign according to marker orientation.\n"
-            "23) Compute marker_T_obj and Save marker_T_obj (configs/markers.json).\n"
+            "E) marker_T_obj (Object center relative to marker frame)\n"
+            "22) Open Calibration -> Marker-Obj.\n"
+            "23) Set Face axis = cube axis pointing toward the marker; Sign = +1 or -1.\n"
+            "24) Click Compute marker_T_obj, then Save marker_T_obj (configs/markers.json).\n"
             "\n"
             "F) Perception test\n"
-            "24) Open Calibration -> Perception.\n"
-            "25) Run Detect Once and verify position/quaternion/confidence.\n"
+            "25) Open Calibration -> Perception.\n"
+            "26) Click Detect Once. Verify position, quaternion and confidence.\n"
             "\n"
             "Troubleshooting\n"
             "- Board not found: check lighting, focus, pattern cols/rows, square size.\n"
-            "- Large errors: recalibrate intrinsics.\n"
-            "- Rotated pose: verify P0/P1/P2 order matches camera order.\n"
-            "- Wrong base_T_cam: board moved or base_T_board is inaccurate.\n"
+            "- High RMS intrinsics: add more varied samples or check board flatness.\n"
+            "- Large pos/rot errors: recalibrate intrinsics or re-capture board corners.\n"
+            "- Rotated pose: verify P0/P1/P2 order matches camera view orientation.\n"
+            "- Wrong base_T_cam: board moved after base_T_board was captured.\n"
             "\n"
             "Sketch (board calibration, world coordinates)\n"
             "P0 = (0,0)  P1 = (cols-1,0)  P2 = (0,rows-1)\n"
