@@ -528,7 +528,7 @@ class SerialClient:
 # GUI Rahmen
 # =========================
 root = tk.Tk()
-root.title("Robotrol V7.1")
+root.title("Robotrol V7.2")
 root.geometry("1150x1000")
 
 style = ttk.Style()

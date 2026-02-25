@@ -777,6 +777,12 @@ class TcpKinematicsFrame(ttk.Frame):
                 joints.append(float(src.get(ax, 0.0)))
             except Exception:
                 joints.append(0.0)
+        if joints and all(j == 0.0 for j in joints):
+            if hasattr(self.exec, "log"):
+                self.exec.log(
+                    "Warning: All joint positions are 0.0 — "
+                    "axis_positions may be stale or MPos not yet received."
+                )
         return joints
 
     def _save_dh_to_json(self):
@@ -890,10 +896,36 @@ class TcpKinematicsFrame(ttk.Frame):
                 pass
 
             lims = self._limits()
-            if getattr(self, "_last_tcp_joints", None) is not None and not (st.get("MPos") or st.get("WPos")):
-                joints = list(self._last_tcp_joints)
-            else:
-                joints = self._get_current_joint_list()
+            # Refresh joint positions from last status if available (keep exec.axis_positions up-to-date)
+            st = {}
+            try:
+                st = getattr(self.client, "last_status", None) or {}
+                mpos = st.get("MPos") or {}
+                if mpos:
+                    for ax, val in mpos.items():
+                        if ax in AXES:
+                            self.exec.axis_positions[ax] = float(val)
+                    # record a snapshot for fallback
+                    self._last_tcp_joints = self._get_current_joint_list()
+            except Exception:
+                pass
+
+            # Prefer a one-time provided initial joint guess if set (consumed),
+            # otherwise read current joint positions as the initial guess.
+            joints = None
+            try:
+                if getattr(self, "_initial_joints_next", None) is not None:
+                    # consume the provided initial joints
+                    joints = list(self._initial_joints_next)
+                    try:
+                        del self._initial_joints_next
+                    except Exception:
+                        self._initial_joints_next = None
+                else:
+                    joints = self._get_current_joint_list()
+            except Exception:
+                # Fall back to last known TCP joints if live read fails.
+                joints = list(getattr(self, "_last_tcp_joints", [0.0] * len(self._dh_axes())))
             target_R = self._rpy_to_R(roll_deg, pitch_deg, yaw_deg)
             target_pos = [x, y, z]
 

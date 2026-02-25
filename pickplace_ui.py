@@ -79,6 +79,9 @@ class PickPlaceTab(ttk.Frame):
         self._tnt_min_area_var = tk.IntVar(value=500)
         self._tnt_kernel_var = tk.IntVar(value=3)
 
+        self._test_pitch_adapt_var = tk.BooleanVar(value=False)
+        self._test_max_pitch_var = tk.DoubleVar(value=35.0)
+
         self._base_T_board_vars = None
         self._base_T_cam_vars = None
         self._marker_T_obj_vars = None
@@ -110,6 +113,20 @@ class PickPlaceTab(ttk.Frame):
         ttk.Label(header, textvariable=self._status_var).grid(row=0, column=3, sticky="w")
 
         tabs = ttk.Notebook(self)
+        # keep reference for diagnostics/fixes
+        self._tabs = tabs
+        # Limit notebook height so the Pick & Place tab does not force the main
+        # window to grow so large that lower UI buttons become invisible.
+        # 600px is a reasonable default; adjust if your screen is very small.
+        try:
+            tabs.configure(height=600)
+        except Exception:
+            pass
+        # schedule a diagnostic check shortly after the UI is mapped
+        try:
+            self.after(150, self._dump_layout_sizes)
+        except Exception:
+            pass
         tabs.grid(row=1, column=0, sticky="nsew", padx=6, pady=4)
         self.rowconfigure(1, weight=1)
 
@@ -341,8 +358,14 @@ class PickPlaceTab(ttk.Frame):
         ttk.Checkbutton(test_frame, text="Dry run (no motion)", variable=self._test_dry_run_var).grid(
             row=3, column=0, sticky="w", padx=4, pady=(2, 2)
         )
+        ttk.Checkbutton(
+            test_frame, text="Pitch adaptation (tilt outward from board center)",
+            variable=self._test_pitch_adapt_var,
+        ).grid(row=4, column=0, columnspan=2, sticky="w", padx=4, pady=(2, 0))
+        ttk.Label(test_frame, text="Max pitch (°):").grid(row=5, column=0, sticky="w", padx=4, pady=2)
+        ttk.Entry(test_frame, textvariable=self._test_max_pitch_var, width=8).grid(row=5, column=1, sticky="w", padx=4, pady=2)
         ttk.Label(test_frame, text="Use this to verify calibration/kinematics before pick.").grid(
-            row=4, column=0, columnspan=2, sticky="w", padx=4, pady=(2, 4)
+            row=6, column=0, columnspan=2, sticky="w", padx=4, pady=(2, 4)
         )
 
     def _build_camera_tab(self, tab):
@@ -387,6 +410,38 @@ class PickPlaceTab(ttk.Frame):
             if key in self._board_point_vars:
                 self._board_point_vars[key].set(f"{point[0]:.2f}, {point[1]:.2f}, {point[2]:.2f}")
             self._log(f"Board point {key} captured at {point}.")
+            # Append capture to JSON log for verification/simulation
+            try:
+                entry = {
+                    "timestamp": time.time(),
+                    "type": "board_point",
+                    "key": key,
+                    "tcp_mm": point,
+                }
+                # attempt to include joint values if available
+                joints = None
+                try:
+                    get_j = getattr(self._execute_app, "get_current_joint_list", None)
+                    if callable(get_j):
+                        joints = get_j()
+                    else:
+                        kt = getattr(self._execute_app, "kinematics_tabs", None)
+                        if kt is not None and hasattr(kt, "_get_current_joint_list"):
+                            joints = kt._get_current_joint_list()
+                except Exception:
+                    joints = None
+                if joints is not None:
+                    entry["joints_rad"] = joints
+                    try:
+                        # If possible, set the kinematics initial-joint guess for next move
+                        kt = getattr(self._execute_app, "kinematics_tabs", None)
+                        if kt is not None:
+                            kt._initial_joints_next = list(joints)
+                    except Exception:
+                        pass
+                self._append_capture_log(entry)
+            except Exception:
+                pass
         except Exception as exc:
             self._log(f"Capture board point failed: {exc}")
 
@@ -408,12 +463,156 @@ class PickPlaceTab(ttk.Frame):
             point = self._get_tcp_position_mm()
             self._board_square_points[name[:2]] = point
             self._log(f"Square {name} captured at {point}.")
+            try:
+                entry = {
+                    "timestamp": time.time(),
+                    "type": "square_point",
+                    "square": name[:2],
+                    "tcp_mm": point,
+                }
+                joints = None
+                try:
+                    get_j = getattr(self._execute_app, "get_current_joint_list", None)
+                    if callable(get_j):
+                        joints = get_j()
+                    else:
+                        kt = getattr(self._execute_app, "kinematics_tabs", None)
+                        if kt is not None and hasattr(kt, "_get_current_joint_list"):
+                            joints = kt._get_current_joint_list()
+                except Exception:
+                    joints = None
+                if joints is not None:
+                    entry["joints_rad"] = joints
+                    try:
+                        kt = getattr(self._execute_app, "kinematics_tabs", None)
+                        if kt is not None:
+                            kt._initial_joints_next = list(joints)
+                    except Exception:
+                        pass
+                self._append_capture_log(entry)
+            except Exception:
+                pass
         except Exception as exc:
             self._log(f"Capture square failed: {exc}")
 
     def _clear_square_points(self):
         self._board_square_points = {}
         self._log("Square points cleared.")
+
+    # ------------------------------------------------------------------
+    # Plausibility checks for base_T_board
+    # ------------------------------------------------------------------
+
+    def _check_base_T_board_point_geometry(self, p0, p1, p2, x_len, y_len):
+        """Check geometric consistency of the three captured corner points."""
+        vx = [p1[i] - p0[i] for i in range(3)]
+        vy = [p2[i] - p0[i] for i in range(3)]
+        dist_x = math.sqrt(sum(v * v for v in vx))
+        dist_y = math.sqrt(sum(v * v for v in vy))
+
+        # Distance check ±20 %
+        tol = 0.20
+        if abs(dist_x - x_len) > x_len * tol:
+            self._log(
+                f"  [WARN] P0→P1 distance {dist_x:.1f} mm deviates from expected "
+                f"{x_len:.1f} mm by >{tol*100:.0f}% — wrong corner or square-size?"
+            )
+        if abs(dist_y - y_len) > y_len * tol:
+            self._log(
+                f"  [WARN] P0→P2 distance {dist_y:.1f} mm deviates from expected "
+                f"{y_len:.1f} mm by >{tol*100:.0f}% — wrong corner or square-size?"
+            )
+
+        # Orthogonality check: angle between vx and vy should be 90° ± 15°
+        if dist_x > 1e-6 and dist_y > 1e-6:
+            cos_a = sum(vx[i] * vy[i] for i in range(3)) / (dist_x * dist_y)
+            cos_a = max(-1.0, min(1.0, cos_a))
+            angle_deg = math.degrees(math.acos(abs(cos_a)))
+            deviation = abs(90.0 - angle_deg)
+            if deviation > 15.0:
+                self._log(
+                    f"  [WARN] Angle P0→P1 / P0→P2 = {angle_deg:.1f}° (expected 90°, "
+                    f"deviation {deviation:.1f}°) — P1/P2 likely not orthogonal axes. "
+                    f"Check P0/P1/P2 order in help sketch."
+                )
+            else:
+                self._log(f"  [OK]  P0/P1/P2 orthogonality: {angle_deg:.1f}° (±{deviation:.1f}° from 90°)")
+
+    def _check_base_T_board_plausibility(self, base_T_board):
+        """Common plausibility checks on the computed 4×4 base_T_board matrix."""
+        # Rotation sub-matrix
+        R = [[base_T_board[r][c] for c in range(3)] for r in range(3)]
+
+        # Det(R) must be +1 for proper rotation
+        det = (
+            R[0][0] * (R[1][1] * R[2][2] - R[1][2] * R[2][1])
+            - R[0][1] * (R[1][0] * R[2][2] - R[1][2] * R[2][0])
+            + R[0][2] * (R[1][0] * R[2][1] - R[1][1] * R[2][0])
+        )
+        if det < 0.5:
+            self._log(
+                f"  [WARN] det(R) = {det:.3f} — rotation matrix invalid "
+                f"(reflection or degenerate). Check P0/P1/P2 order."
+            )
+        else:
+            self._log(f"  [OK]  det(R) = {det:.4f}")
+
+        # Board Z-axis (3rd column of R) should be roughly vertical in base frame.
+        # R[2][2] = dot(base_Z, board_Z); |R[2][2]| > cos(45°)=0.707 means <45° tilt.
+        board_z_in_base_z = abs(R[2][2])
+        tilt_deg = math.degrees(math.acos(min(1.0, board_z_in_base_z)))
+        if tilt_deg > 45.0:
+            self._log(
+                f"  [WARN] Board normal tilted {tilt_deg:.1f}° from base-Z — "
+                f"board may not be horizontal or axes are swapped."
+            )
+        else:
+            self._log(f"  [OK]  Board normal tilt from vertical: {tilt_deg:.1f}°")
+
+        # Compare with previously stored calibration (if any)
+        try:
+            if self._configs is None:
+                return
+            calib = self._configs.get("calibration", {})
+            old_T = calib.get("base_T_board")
+            if not old_T:
+                return
+            # Translation delta
+            t_new = [base_T_board[r][3] for r in range(3)]
+            t_old = [old_T[r][3] for r in range(3)]
+            t_delta = math.sqrt(sum((t_new[i] - t_old[i]) ** 2 for i in range(3)))
+            if t_delta > 200.0:
+                self._log(
+                    f"  [WARN] Board origin moved {t_delta:.1f} mm vs stored calibration "
+                    f"— board repositioned or wrong TCP?"
+                )
+            else:
+                self._log(f"  [OK]  Origin delta vs stored: {t_delta:.1f} mm")
+
+            # Rotation delta angle: trace method
+            R_old = [[old_T[r][c] for c in range(3)] for r in range(3)]
+            # R_delta = R_new @ R_old^T
+            trace_delta = sum(
+                sum(R[i][k] * R_old[j][k] for k in range(3)) * (1 if i == j else 0)
+                for i in range(3) for j in range(3)
+            )
+            # Simpler: direct trace of R_new @ R_old^T
+            trace_val = sum(
+                sum(R[i][k] * R_old[j][k] for k in range(3))
+                for i in range(3) for j in range(3) if i == j
+            )
+            cos_theta = (trace_val - 1.0) / 2.0
+            cos_theta = max(-1.0, min(1.0, cos_theta))
+            rot_delta_deg = math.degrees(math.acos(cos_theta))
+            if rot_delta_deg > 30.0:
+                self._log(
+                    f"  [WARN] Board orientation changed {rot_delta_deg:.1f}° vs stored "
+                    f"— board rotated or P0/P1/P2 in different order than last time?"
+                )
+            else:
+                self._log(f"  [OK]  Rotation delta vs stored: {rot_delta_deg:.1f}°")
+        except Exception as exc:
+            self._log(f"  [INFO] Could not compare with stored calibration: {exc}")
 
     def _compute_base_T_board_from_points(self):
         try:
@@ -456,6 +655,9 @@ class PickPlaceTab(ttk.Frame):
             err1 = math.sqrt(sum((pred_p1[i] - p1[i]) ** 2 for i in range(3)))
             err2 = math.sqrt(sum((pred_p2[i] - p2[i]) ** 2 for i in range(3)))
             self._log(f"base_T_board computed. err_x={err1:.2f} mm err_y={err2:.2f} mm")
+            self._log("Plausibility check:")
+            self._check_base_T_board_point_geometry(p0, p1, p2, x_len, y_len)
+            self._check_base_T_board_plausibility(base_T_board)
         except Exception as exc:
             self._log(f"Compute base_T_board failed: {exc}")
 
@@ -507,6 +709,8 @@ class PickPlaceTab(ttk.Frame):
             B_fit = (R @ B.T).T + t
             err = np.linalg.norm(B_fit - A, axis=1).mean()
             self._log(f"base_T_board fit from squares. avg_err={err:.2f} mm")
+            self._log("Plausibility check:")
+            self._check_base_T_board_plausibility(base_T_board)
         except Exception as exc:
             self._log(f"Fit base_T_board failed: {exc}")
 
@@ -549,35 +753,146 @@ class PickPlaceTab(ttk.Frame):
         base_T = matmul(base_T_board, T)
         return [base_T[0][3], base_T[1][3], base_T[2][3]]
 
+    def _compute_approach_rpy(self, sq_x, sq_y, roll0, pitch0, yaw0):
+        """
+        When pitch adaptation is enabled, tilt the tool outward from the board
+        centre by up to max_pitch_deg at the board corners.
+
+        sq_x, sq_y : square centre in board frame (mm).
+        Returns modified (roll, pitch, yaw) in degrees.
+        """
+        if not self._test_pitch_adapt_var.get():
+            return roll0, pitch0, yaw0
+
+        max_pitch = float(self._test_max_pitch_var.get())
+        cols = int(self._pattern_cols_var.get())
+        rows = int(self._pattern_rows_var.get())
+        sq = float(self._square_size_var.get())
+
+        # Board centre and half-diagonal (max reachable distance from centre)
+        cx = cols * sq / 2.0
+        cy = rows * sq / 2.0
+        max_d = math.sqrt(cx * cx + cy * cy)
+        if max_d < 1e-6:
+            return roll0, pitch0, yaw0
+
+        dx = sq_x - cx
+        dy = sq_y - cy
+        d = math.sqrt(dx * dx + dy * dy)
+        tilt_deg = max_pitch * (d / max_d)
+        if tilt_deg < 0.1:
+            return roll0, pitch0, yaw0
+
+        # Tilt axis in board frame: perpendicular to (dx,dy) in board XY-plane.
+        # Rotating around (-dy, dx, 0) by tilt_deg leans the tool outward toward
+        # the square's direction from the board centre.
+        tilt_axis_board = normalize_vector([-dy, dx, 0.0])
+        if tilt_axis_board is None:
+            return roll0, pitch0, yaw0
+
+        # Transform tilt axis from board frame to base frame via base_T_board rotation.
+        base_T_board = self._read_matrix_vars(self._base_T_board_vars)
+        R_board = [[base_T_board[r][c] for c in range(3)] for r in range(3)]
+        kx = sum(R_board[0][c] * tilt_axis_board[c] for c in range(3))
+        ky = sum(R_board[1][c] * tilt_axis_board[c] for c in range(3))
+        kz = sum(R_board[2][c] * tilt_axis_board[c] for c in range(3))
+
+        # Rodrigues rotation matrix around unit axis (kx,ky,kz) by tilt_deg
+        theta = math.radians(tilt_deg)
+        c, s = math.cos(theta), math.sin(theta)
+        t = 1.0 - c
+        R_tilt = [
+            [t*kx*kx + c,      t*kx*ky - s*kz, t*kx*kz + s*ky],
+            [t*kx*ky + s*kz,   t*ky*ky + c,    t*ky*kz - s*kx],
+            [t*kx*kz - s*ky,   t*ky*kz + s*kx, t*kz*kz + c   ],
+        ]
+
+        # Compose: R_new = R_tilt @ R_original
+        R0 = self._rpy_to_R(roll0, pitch0, yaw0)
+        R_new = [
+            [sum(R_tilt[i][k] * R0[k][j] for k in range(3)) for j in range(3)]
+            for i in range(3)
+        ]
+        roll_new, pitch_new, yaw_new = self._rpy_from_R(R_new)
+        return roll_new, pitch_new, yaw_new
+
     def _test_board_moves(self):
         def _task():
             try:
                 if self._execute_app is None or not hasattr(self._execute_app, "kinematics_tabs"):
                     raise RuntimeError("Kinematics UI not available")
                 self._ensure_pipeline()
+                kt = self._execute_app.kinematics_tabs
+
+                # --- Verify live MPos is available before any movement ---
+                client = getattr(self._execute_app, "client", None)
+                st = getattr(client, "last_status", None) or {}
+                mpos = st.get("MPos") or {}
+                if not mpos:
+                    raise RuntimeError(
+                        "No current machine position (MPos) available. "
+                        "Is the robot connected and homed?"
+                    )
+                # Prime axis_positions with live MPos so IK starts from actual position
+                # kt.world is the TcpKinematicsFrame that owns exec / _get_current_joint_list
+                kw = kt.world
+                for ax, val in mpos.items():
+                    if ax in ("A", "B", "C", "X", "Y", "Z"):
+                        kw.exec.axis_positions[ax] = float(val)
+                joints_init = kw._get_current_joint_list()
+                self._log(f"Board test: live joints from MPos = {joints_init}")
+
                 targets = self._parse_board_targets(self._test_squares_var.get())
                 if not targets:
                     raise RuntimeError("No test targets specified.")
                 z_safe = float(self._test_z_safe_var.get())
                 z_touch = float(self._test_z_touch_var.get())
                 dry_run = bool(self._test_dry_run_var.get())
-                roll, pitch, yaw = self._current_rpy()
+                roll0, pitch0, yaw0 = self._current_rpy()
                 feed = self._get_speed_slider_feed(60.0)
-                self._log(f"Board test dry_run={dry_run} z_safe={z_safe} z_touch={z_touch}")
+                pitch_adapt = self._test_pitch_adapt_var.get()
+                self._log(
+                    f"Board test dry_run={dry_run} z_safe={z_safe} z_touch={z_touch} "
+                    f"pitch_adapt={pitch_adapt}"
+                )
+
+                # --- Safe-Z retreat at current X/Y before approaching any board target ---
+                if not dry_run:
+                    tcp_now = self._execute_app.get_current_tcp_mm()
+                    x_now = float(tcp_now.get("X_mm", 0.0))
+                    y_now = float(tcp_now.get("Y_mm", 0.0))
+                    self._log(
+                        f"Board test: retreating to safe Z={z_safe} "
+                        f"at current X={x_now:.1f} Y={y_now:.1f}"
+                    )
+                    # Provide explicit joint hint so IK starts from actual position
+                    kw._initial_joints_next = list(joints_init)
+                    ok = kt.move_tcp_pose(x_now, y_now, z_safe, roll0, pitch0, yaw0, feed=feed)
+                    if not ok:
+                        raise RuntimeError("Initial safe-Z retreat failed")
+                    self._wait_for_idle()
+
                 for item in targets:
                     if item[0] == "xy":
                         x_mm, y_mm = item[1], item[2]
                     else:
                         x_mm, y_mm = self._board_square_center(item[1], item[2])
+
+                    # Per-square orientation: tilt outward from board centre if enabled
+                    roll, pitch, yaw = self._compute_approach_rpy(x_mm, y_mm, roll0, pitch0, yaw0)
+
                     p_safe = self._board_to_base(x_mm, y_mm, z_safe)
                     p_touch = self._board_to_base(x_mm, y_mm, z_touch)
-                    self._log(f"Test target {item}: base_safe={p_safe} base_touch={p_touch}")
-                    preview_safe = self._execute_app.kinematics_tabs.preview_tcp_gcode(
+                    self._log(
+                        f"Test target {item}: base_safe={p_safe} base_touch={p_touch} "
+                        f"rpy=({roll:.1f},{pitch:.1f},{yaw:.1f})"
+                    )
+                    preview_safe = kt.preview_tcp_gcode(
                         p_safe[0], p_safe[1], p_safe[2], roll, pitch, yaw, feed=feed
                     )
                     if not preview_safe or not preview_safe.get("ok", False):
                         raise RuntimeError(f"Preview failed for safe target: {preview_safe}")
-                    preview_touch = self._execute_app.kinematics_tabs.preview_tcp_gcode(
+                    preview_touch = kt.preview_tcp_gcode(
                         p_touch[0], p_touch[1], p_touch[2], roll, pitch, yaw, feed=feed
                     )
                     if not preview_touch or not preview_touch.get("ok", False):
@@ -585,13 +900,29 @@ class PickPlaceTab(ttk.Frame):
                     self._log(f"Preview safe: {preview_safe.get('gcode')}")
                     self._log(f"Preview touch: {preview_touch.get('gcode')}")
                     if not dry_run:
-                        ok = self._execute_app.kinematics_tabs.move_tcp_pose(
+                        # Refresh joint hint from live MPos before each safe move
+                        st2 = getattr(client, "last_status", None) or {}
+                        mpos2 = st2.get("MPos") or {}
+                        if mpos2:
+                            for ax, val in mpos2.items():
+                                if ax in ("A", "B", "C", "X", "Y", "Z"):
+                                    kw.exec.axis_positions[ax] = float(val)
+                            kw._initial_joints_next = kw._get_current_joint_list()
+                        ok = kt.move_tcp_pose(
                             p_safe[0], p_safe[1], p_safe[2], roll, pitch, yaw, feed=feed
                         )
                         if not ok:
                             raise RuntimeError("Move to safe failed")
                         self._wait_for_idle()
-                        ok = self._execute_app.kinematics_tabs.move_tcp_pose(
+                        # Refresh joint hint from live MPos before touch move
+                        st3 = getattr(client, "last_status", None) or {}
+                        mpos3 = st3.get("MPos") or {}
+                        if mpos3:
+                            for ax, val in mpos3.items():
+                                if ax in ("A", "B", "C", "X", "Y", "Z"):
+                                    kw.exec.axis_positions[ax] = float(val)
+                            kw._initial_joints_next = kw._get_current_joint_list()
+                        ok = kt.move_tcp_pose(
                             p_touch[0], p_touch[1], p_touch[2], roll, pitch, yaw, feed=feed
                         )
                         if not ok:
@@ -612,6 +943,25 @@ class PickPlaceTab(ttk.Frame):
         self._cam_calib_status.set("No samples")
         self._cam_calib_result_var.set("")
         self._log("Camera calibration samples cleared.")
+
+    def _append_capture_log(self, entry: dict):
+        """Append a capture entry to data/capture_poses.json (creates file if missing)."""
+        try:
+            data_dir = os.path.join(self._base_dir, "data")
+            os.makedirs(data_dir, exist_ok=True)
+            path = os.path.join(data_dir, "capture_poses.json")
+            existing = []
+            if os.path.isfile(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        existing = json.load(f) or []
+                except Exception:
+                    existing = []
+            existing.append(entry)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(existing, f, indent=2)
+        except Exception:
+            pass
 
     def _capture_camera_sample(self):
         try:
@@ -1093,29 +1443,95 @@ class PickPlaceTab(ttk.Frame):
             "- Rotated pose: verify P0/P1/P2 order matches camera view orientation.\n"
             "- Wrong base_T_cam: board moved after base_T_board was captured.\n"
             "\n"
-            "Sketch (board calibration, world coordinates)\n"
+            "Sketch (board calibration — positions)\n"
             "P0 = (0,0)  P1 = (cols-1,0)  P2 = (0,rows-1)\n"
             "\n"
-            "   +Y (rows)\n"
-            "   ^\n"
-            "   |                R0 (Robot Base)\n"
-            "   |                o\n"
-            "   |                |\n"
-            "   |<---- 25 cm ----|\n"
-            "   |\n"
-            "   |   P2 o-----------o\n"
-            "   |      |           |\n"
-            "   |      |   Board   |\n"
-            "   |      |           |\n"
-            "   |   P0 o-----------o P1  -> +X (cols)\n"
-            "   +------------------------------>\n"
-            "          World XY plane (Z up)\n"
-            "          25 cm distance to side edge (X direction)\n"
+            "Positionierung (kurz):\n"
+            "- Robot Basis: Wähle festen Robot-Nullpunkt R0; Robot Z zeigt nach oben; Robot +X zeigt in Arbeitsrichtung (zum Board).\n"
+            "- Board: Lege das Schachbrett flach auf die Arbeitsfläche. Markiere P0 physisch; P1 definiert +X (Spalten), P2 definiert +Y (Reihen).\n"
+            "- Kamera: In diesem Setup ist die Kamera unterhalb des Boards montiert (Kamera blickt nach oben).\n"
+            "  Richte die optische Achse auf die Board-Mitte; Bild-X möglichst parallel zu Board +X.\n"
+            "  Bei Unterbau: achte auf Bildrotation/Invertierung (evtl. Flip) und korrigiere P0/P1/P2-Reihenfolge falls nötig.\n"
+            "\n"
+            "Schema (Top-View, Kamera unterhalb):\n"
+            "  P2 o----o P1   <- +X (cols)\n"
+            "  |\n"
+            "  P0\n"
+            "     ^\n"
+            "     | (optische Achse)\n"
+            "  Camera (unten)\n"
+            "\n"
+            "Robot base -> (Robot +X toward board; Robot Z up)\n"
+            "\n"
+            "Prüf-Schritte:\n"
+            "1) Detect Once: Visualisiere die projizierten Board-Achsen im Kamerabild; Board +X sollte mit Robot +X übereinstimmen.\n"
+            "2) Bei ~90°-Fehler: prüfe P0/P1/P2-Reihenfolge, Bildrotation (Kamera-Mount) und Tool-Frame-Konventionen.\n"
         )
         help_text = tk.Text(tab, wrap="word")
         help_text.insert("1.0", text)
         help_text.configure(state="disabled")
         help_text.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+
+    def _dump_layout_sizes(self):
+        """Diagnostic: log requested heights of each Notebook tab and apply a defensive max-height.
+
+        This helps identify which sub-frame is forcing the main window to grow and applies
+        a safe upper bound so bottom controls remain visible.
+        """
+        try:
+            nb = getattr(self, "_tabs", None)
+            if nb is None:
+                return
+            try:
+                screen_h = self.winfo_toplevel().winfo_screenheight()
+            except Exception:
+                screen_h = 800
+            entries = []
+            for tab_id in nb.tabs():
+                try:
+                    w = nb.nametowidget(tab_id)
+                except Exception:
+                    continue
+                name = nb.tab(tab_id, "text") or str(w)
+                req_h = w.winfo_reqheight()
+                req_w = w.winfo_reqwidth()
+                entries.append((name, req_w, req_h))
+            # log the findings (both to UI log and to console for diagnostics)
+            for name, rw, rh in entries:
+                msg = f"LayoutDiag: tab '{name}' req_w={rw} req_h={rh}"
+                try:
+                    self._log(msg)
+                except Exception:
+                    pass
+                try:
+                    print(msg)
+                except Exception:
+                    pass
+
+            # defensive enforcement: don't let notebook exceed most of the screen
+            max_allowed = max(300, int(screen_h - 200))
+            # current configured height attempt
+            try:
+                cur_h = int(nb.cget("height"))
+            except Exception:
+                cur_h = None
+            # if any tab wants more than allowed, reduce notebook height
+            if any(rh > max_allowed for _, _, rh in entries):
+                try:
+                    nb.configure(height=min(600, max_allowed))
+                    msg2 = f"LayoutDiag: enforced notebook max height {min(600,max_allowed)}"
+                    try:
+                        self._log(msg2)
+                    except Exception:
+                        pass
+                    try:
+                        print(msg2)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _make_matrix_grid(self, parent, title, readonly=False):
         frame = ttk.LabelFrame(parent, text=title)
