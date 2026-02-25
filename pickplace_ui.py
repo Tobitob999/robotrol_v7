@@ -6,6 +6,12 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
+try:
+    import autocalib_v1 as _autocalib
+    _AUTOCALIB_AVAILABLE = True
+except ImportError:
+    _AUTOCALIB_AVAILABLE = False
+
 from control import config as config_loader
 from control.app import build_pipeline
 from learning.tnt_self_learning import TntSelfLearningManager
@@ -189,10 +195,12 @@ class PickPlaceTab(ttk.Frame):
         base_tab = ttk.Frame(tabs)
         marker_tab = ttk.Frame(tabs)
         detect_tab = ttk.Frame(tabs)
+        autocalib_tab = ttk.Frame(tabs)
         tabs.add(camera_tab, text="Camera")
         tabs.add(base_tab, text="Base-Cam")
         tabs.add(marker_tab, text="Marker-Obj")
         tabs.add(detect_tab, text="Perception")
+        tabs.add(autocalib_tab, text="Auto-Calib")
 
         # Base-Cam has many stacked frames – wrap in scrollable canvas so it
         # doesn't force the outer Notebook (and main window) to grow vertically.
@@ -222,6 +230,7 @@ class PickPlaceTab(ttk.Frame):
         self._build_camera_tab(camera_tab)
         self._build_marker_tab(marker_tab)
         self._build_detect_tab(detect_tab)
+        self._build_autocalib_tab(autocalib_tab)
 
     def _build_base_cam_tab(self, tab):
         info = ttk.Label(tab, text="Compute base_T_cam using a chessboard and a known base_T_board.")
@@ -796,6 +805,239 @@ class PickPlaceTab(ttk.Frame):
         filt_btns.pack(anchor="w", padx=6, pady=(4, 6))
         ttk.Button(filt_btns, text="Apply Filters", command=self._apply_tnt_filters).pack(side=tk.LEFT, padx=4)
         ttk.Button(filt_btns, text="Save Filters", command=self._save_tnt_filters).pack(side=tk.LEFT, padx=4)
+
+    def _build_autocalib_tab(self, tab):
+        """
+        Auto-Calib sub-tab: automatic eye-to-hand hand-eye calibration.
+
+        Workflow:
+          1. Mount an ArUco marker on the TCP flange.
+          2. Configure marker dict / ID / side length.
+          3. Move robot to ≥ 8 diverse poses (vary orientation ≥ 10° each step).
+          4. Click "Capture Pose" at each pose.
+          5. Click "Solve" → base_T_cam is computed.
+          6. Verify RMS error, then click "Apply to Base-Cam".
+        """
+        import numpy as np
+        from PIL import Image, ImageTk
+
+        tab.columnconfigure(0, weight=1)
+
+        if not _AUTOCALIB_AVAILABLE:
+            ttk.Label(
+                tab,
+                text="autocalib_v1 module not found.\n"
+                     "Ensure autocalib_v1.py is in the project folder.",
+                foreground="red",
+            ).pack(padx=10, pady=20)
+            return
+
+        # ── State ─────────────────────────────────────────────────────────────
+        self._ac_session  = None   # AutoCalibSession instance
+        self._ac_result   = None   # last solved 4×4 base_T_cam (np.ndarray)
+        self._ac_imgtk    = None   # keep PhotoImage alive (gc protection)
+
+        self._ac_dict_var   = tk.StringVar(value="DICT_4X4_50")
+        self._ac_id_var     = tk.StringVar(value="0")
+        self._ac_size_var   = tk.StringVar(value="50")
+        self._ac_status_var = tk.StringVar(value="0 samples  (need ≥ 5)   diversity: 0.0°")
+        self._ac_rms_var    = tk.StringVar(value="RMS: —")
+        self._ac_mat_vars   = [
+            [tk.StringVar(value="—") for _ in range(4)] for _ in range(4)
+        ]
+
+        # ── Marker config ──────────────────────────────────────────────────────
+        mf = ttk.LabelFrame(tab, text="Marker (attached to TCP flange)")
+        mf.pack(fill=tk.X, padx=6, pady=(6, 4))
+        mr = ttk.Frame(mf)
+        mr.pack(anchor="w", padx=6, pady=4)
+        ttk.Label(mr, text="ArUco dict:").pack(side=tk.LEFT)
+        ttk.Combobox(
+            mr, textvariable=self._ac_dict_var,
+            values=_autocalib.ARUCO_DICT_NAMES,
+            width=14, state="readonly",
+        ).pack(side=tk.LEFT, padx=(4, 12))
+        ttk.Label(mr, text="Marker ID:").pack(side=tk.LEFT)
+        ttk.Entry(mr, textvariable=self._ac_id_var, width=5, justify="right").pack(
+            side=tk.LEFT, padx=(4, 12)
+        )
+        ttk.Label(mr, text="Side (mm):").pack(side=tk.LEFT)
+        ttk.Entry(mr, textvariable=self._ac_size_var, width=6, justify="right").pack(
+            side=tk.LEFT, padx=(4, 0)
+        )
+
+        # ── Capture section ────────────────────────────────────────────────────
+        cf = ttk.LabelFrame(tab, text="Capture")
+        cf.pack(fill=tk.X, padx=6, pady=4)
+        ttk.Label(
+            cf,
+            text=(
+                "Move robot so the marker is fully visible, then click Capture Pose.\n"
+                "Vary orientation ≥ 10° between captures (tilt, rotate around Z)."
+            ),
+            wraplength=460, foreground="gray",
+        ).pack(anchor="w", padx=6, pady=(4, 2))
+        ttk.Label(cf, textvariable=self._ac_status_var).pack(anchor="w", padx=6, pady=(0, 4))
+        cb = ttk.Frame(cf)
+        cb.pack(anchor="w", padx=6, pady=(0, 6))
+        btn_capture = ttk.Button(cb, text="Capture Pose", command=lambda: _ac_capture())
+        btn_capture.pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(cb, text="Clear", command=lambda: _ac_clear()).pack(side=tk.LEFT)
+
+        # ── Preview canvas ─────────────────────────────────────────────────────
+        pf = ttk.LabelFrame(tab, text="Last captured frame")
+        pf.pack(fill=tk.X, padx=6, pady=4)
+        ac_canvas = tk.Canvas(pf, width=240, height=160, bg="#111", highlightthickness=0)
+        ac_canvas.pack(padx=4, pady=4)
+
+        # ── Result section ─────────────────────────────────────────────────────
+        rf = ttk.LabelFrame(tab, text="Result  base_T_cam")
+        rf.pack(fill=tk.X, padx=6, pady=4)
+        rb_row = ttk.Frame(rf)
+        rb_row.pack(anchor="w", padx=6, pady=(6, 2))
+        btn_solve = ttk.Button(rb_row, text="Solve", state="disabled", command=lambda: _ac_solve())
+        btn_solve.pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(rb_row, textvariable=self._ac_rms_var, foreground="gray").pack(side=tk.LEFT)
+
+        mat_frame = ttk.Frame(rf)
+        mat_frame.pack(anchor="w", padx=6, pady=2)
+        for r in range(4):
+            for c in range(4):
+                ttk.Label(
+                    mat_frame, textvariable=self._ac_mat_vars[r][c],
+                    width=10, anchor="e", relief=tk.GROOVE, padding=(2, 1),
+                ).grid(row=r, column=c, padx=1, pady=1)
+
+        apply_row = ttk.Frame(rf)
+        apply_row.pack(anchor="w", padx=6, pady=(4, 8))
+        btn_apply = ttk.Button(
+            apply_row, text="Apply to Base-Cam", state="disabled",
+            command=lambda: _ac_apply(),
+        )
+        btn_apply.pack(side=tk.LEFT)
+
+        # ── Refresh status ─────────────────────────────────────────────────────
+        def _ac_refresh_status():
+            sess = self._ac_session
+            n   = sess.n_samples()   if sess else 0
+            div = sess.diversity_score() if sess else 0.0
+            min_s = _autocalib.AutoCalibSession.MIN_SAMPLES
+            suf = "✓" if n >= min_s else f"(need ≥ {min_s})"
+            self._ac_status_var.set(f"{n} samples  {suf}   diversity: {div:.1f}°")
+            btn_solve.config(
+                state="normal" if (sess and sess.can_solve()) else "disabled"
+            )
+
+        # ── Show frame in canvas ───────────────────────────────────────────────
+        def _ac_show_frame(frame_rgb):
+            try:
+                img = Image.fromarray(frame_rgb)
+                img.thumbnail((240, 160), Image.LANCZOS)
+                self._ac_imgtk = ImageTk.PhotoImage(img)
+                ac_canvas.delete("all")
+                ac_canvas.create_image(120, 80, image=self._ac_imgtk, anchor="center")
+            except Exception:
+                pass
+
+        # ── Capture ────────────────────────────────────────────────────────────
+        def _ac_capture():
+            import cv2 as _cv2
+
+            frame_rgb = None
+            try:
+                frame_rgb = self._camera_capture.get_latest_frame()
+            except Exception:
+                pass
+            if frame_rgb is None:
+                self._ac_status_var.set("Camera not available — start camera first.")
+                return
+
+            frame_bgr = _cv2.cvtColor(frame_rgb, _cv2.COLOR_RGB2BGR)
+
+            try:
+                tcp = self._execute_app.get_current_tcp_mm()
+                x  = float(tcp.get("X_mm", 0.0))
+                y  = float(tcp.get("Y_mm", 0.0))
+                z  = float(tcp.get("Z_mm", 0.0))
+                ro = float(tcp.get("Roll_deg", 0.0))
+                pi = float(tcp.get("Pitch_deg", tcp.get("Tilt_deg", 0.0)))
+                ya = float(tcp.get("Yaw_deg", 0.0))
+            except Exception as e:
+                self._ac_status_var.set(f"TCP read error: {e}")
+                return
+
+            cam_cfg = self._configs.get("camera", {})
+            K, D = self._camera_model_from_cfg(cam_cfg)
+
+            dict_name  = self._ac_dict_var.get()
+            marker_id  = int(self._ac_id_var.get())
+            size_mm    = float(self._ac_size_var.get())
+            aruco_dict = _autocalib.get_aruco_dict(dict_name)
+
+            if self._ac_session is None:
+                self._ac_session = _autocalib.AutoCalibSession(
+                    K, D, aruco_dict, marker_id, size_mm,
+                )
+
+            found, annotated_bgr = self._ac_session.add_capture(
+                frame_bgr, x, y, z, ro, pi, ya,
+            )
+
+            vis_rgb = _cv2.cvtColor(annotated_bgr, _cv2.COLOR_BGR2RGB)
+            _ac_show_frame(vis_rgb)
+
+            if not found:
+                self._ac_status_var.set(
+                    f"Marker {marker_id} not detected — adjust position or lighting."
+                )
+            else:
+                _ac_refresh_status()
+
+        # ── Clear ──────────────────────────────────────────────────────────────
+        def _ac_clear():
+            if self._ac_session is not None:
+                self._ac_session.clear()
+            self._ac_result = None
+            self._ac_rms_var.set("RMS: —")
+            for row in self._ac_mat_vars:
+                for v in row:
+                    v.set("—")
+            btn_apply.config(state="disabled")
+            ac_canvas.delete("all")
+            _ac_refresh_status()
+
+        # ── Solve ──────────────────────────────────────────────────────────────
+        def _ac_solve():
+            if self._ac_session is None or not self._ac_session.can_solve():
+                return
+            try:
+                base_T_cam = self._ac_session.solve()
+                rms = self._ac_session.reprojection_error_mm(base_T_cam)
+                self._ac_result = base_T_cam
+                self._ac_rms_var.set(f"RMS: {rms:.2f} mm")
+                for r in range(4):
+                    for c in range(4):
+                        self._ac_mat_vars[r][c].set(f"{base_T_cam[r, c]:.4f}")
+                btn_apply.config(state="normal")
+            except Exception as e:
+                self._ac_rms_var.set(f"Solve error: {e}")
+
+        # ── Apply ──────────────────────────────────────────────────────────────
+        def _ac_apply():
+            if self._ac_result is None:
+                return
+            mat = self._ac_result.tolist()
+            transforms = self._configs.get("transforms", {})
+            transforms["base_T_cam"] = mat
+            self._write_config("transforms", transforms)
+            try:
+                self._set_matrix_vars(self._base_T_cam_vars, mat)
+            except Exception:
+                pass
+            self._ac_rms_var.set(self._ac_rms_var.get() + "  ✓ applied")
+            btn_apply.config(state="disabled")
+
+        _ac_refresh_status()
 
     def _build_help_tab(self, tab):
         tab.columnconfigure(0, weight=1)

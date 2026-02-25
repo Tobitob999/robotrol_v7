@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m py_compile pickplace_ui.py)",
+      "Bash(python -m py_compile Robotrol_FluidNC_v7_0.py)",
+      "Bash(python -c \":*)",
+      "Bash(python -m py_compile autocalib_v1.py)"
+    ]
+  }
+}
