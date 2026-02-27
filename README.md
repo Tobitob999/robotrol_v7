@@ -18,14 +18,14 @@ Robotrol is a Python-based control center for 6-DoF robotic arms running FluidNC
 
 ## Run
 ```powershell
-python Robotrol_FluidNC_v7_0.py
+python Robotrol_FluidNC_v7_3.py
 ```
 
 ## Profiles
 Profiles live in `Moveo.json`, `EB15_red.json`, and `EB300.json`. Use the profile selector in the UI to switch.
 
 ## Repo layout
-- `Robotrol_FluidNC_v7_0.py` main UI core (window title: V7.1)
+- `Robotrol_FluidNC_v7_3.py` main UI core (window title: V7.3)
 - `Robotrol_FluidNC_v7_0_launcher.py` optional compatibility launcher entrypoint
 - `config_profiles.py` profile loader
 - `Moveo.json`, `EB15_red.json`, `EB300.json` profiles

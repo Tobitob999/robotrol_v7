@@ -111,24 +111,31 @@ def _geom_from_model(model):
     by_axis = {r["axis"]: r for r in rows}
     order = _ordered_axes_from_model(model, available_axes=by_axis.keys())
 
-    link2_axis = None
-    if "Y" in order:
-        y_idx = order.index("Y")
-        tail = [ax for ax in order[y_idx + 1:] if ax != "C"]
+    # L3 = forearm length. Try Y.a_mm first (EB300-style planar link),
+    # then fall back to first d_mm>0 after Y (Moveo-style d-offset).
+    y_a = abs(float(by_axis.get("Y", {}).get("a_mm", 0.0)))
+    if y_a > 1e-9:
+        L3 = y_a
     else:
-        tail = [ax for ax in order if ax not in ("A", "X", "Y", "C")]
-    for ax in tail:
-        d_val = abs(float(by_axis.get(ax, {}).get("d_mm", 0.0)))
-        if d_val > 1e-9:
-            link2_axis = ax
-            break
-    if link2_axis is None:
-        link2_axis = "B" if "B" in by_axis else "Z"
+        link2_axis = None
+        if "Y" in order:
+            y_idx = order.index("Y")
+            tail = [ax for ax in order[y_idx + 1:] if ax != "C"]
+        else:
+            tail = [ax for ax in order if ax not in ("A", "X", "Y", "C")]
+        for ax in tail:
+            d_val = abs(float(by_axis.get(ax, {}).get("d_mm", 0.0)))
+            if d_val > 1e-9:
+                link2_axis = ax
+                break
+        if link2_axis is None:
+            link2_axis = "B" if "B" in by_axis else "Z"
+        L3 = abs(float(by_axis.get(link2_axis, {}).get("d_mm", _DEFAULT_GEOM_DH["L3"])))
 
     return {
         "L1": abs(float(by_axis.get("A", {}).get("d_mm", _DEFAULT_GEOM_DH["L1"]))),
         "L2": abs(float(by_axis.get("X", {}).get("a_mm", _DEFAULT_GEOM_DH["L2"]))),
-        "L3": abs(float(by_axis.get(link2_axis, {}).get("d_mm", _DEFAULT_GEOM_DH["L3"]))),
+        "L3": L3,
         "L4": abs(float(by_axis.get("C", {}).get("d_mm", _DEFAULT_GEOM_DH["L4"]))),
     }
 

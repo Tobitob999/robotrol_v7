@@ -17,8 +17,8 @@
         "max": 150.0
       },
       "Z": {
-        "min": -150.0,
-        "max": 150.0
+        "min": -180.0,
+        "max": 180.0
       },
       "A": {
         "min": -180.0,
@@ -167,21 +167,21 @@
           "step": 0.5,
           "alpha": 0.25,
           "deadzone": 0.35,
-          "speed_scale": 4.0,
+          "speed_scale": 2.0,
           "invert": 1
         },
         "A": {
           "step": 0.5,
           "alpha": 0.25,
           "deadzone": 0.35,
-          "speed_scale": 5.0,
+          "speed_scale": 2.0,
           "invert": 1
         },
         "B": {
           "step": 1.0,
           "alpha": 0.1,
           "deadzone": 0.25,
-          "speed_scale": 5.0,
+          "speed_scale": 2.0,
           "invert": 1
         },
         "C": {
@@ -216,81 +216,80 @@
       "C"
     ],
     "post_transform": {
-      "mirror_x": true,
+      "mirror_x": false,
       "sim_theta_offset_deg": {
         "A": -90.0,
-        "Z": 90.0
+        "X": -90.0,
+        "Z": -90.0
       },
-      "sim_theta_scale": {
-        "B": -1.0
-      }
+      "sim_theta_scale": {}
     },
     "joints": [
       {
         "name": "joint1_A",
         "axis": "A",
         "a": 0.0,
-        "alpha": 1.5707963267948966,
-        "d": 0.076,
+        "alpha": -1.5707963267948966,
+        "d": 0.095,
         "theta_offset": 0.0,
         "q_min": -3.14159265359,
         "q_max": 3.14159265359,
-        "source_note": "EB300 uses EB15 geometry for simulation: alpha=+90deg, d=L1, a=0."
+        "source_note": "Official EB300 DH: alpha=-90deg, d=95mm, a=0."
       },
       {
         "name": "joint2_X",
         "axis": "X",
-        "a": 0.235,
-        "alpha": 0.0,
-        "d": 0.0,
-        "theta_offset": 1.5707963267948966,
-        "q_min": -3.14159265359,
-        "q_max": 3.14159265359,
-        "source_note": "EB300 uses EB15 geometry for simulation: theta_offset=+90deg, alpha=0, d=0, a=L2."
-      },
-      {
-        "name": "joint3_Y",
-        "axis": "Y",
-        "a": 0.23,
+        "a": 0.348,
         "alpha": 0.0,
         "d": 0.0,
         "theta_offset": 0.0,
         "q_min": -3.14159265359,
         "q_max": 3.14159265359,
-        "source_note": "EB300 uses EB15 geometry for simulation: shoulder/elbow geometry row."
+        "source_note": "Official EB300 DH: a=348mm, alpha=0, d=0, theta_offset=0."
+      },
+      {
+        "name": "joint3_Y",
+        "axis": "Y",
+        "a": 0.318,
+        "alpha": 0.0,
+        "d": 0.0,
+        "theta_offset": 0.0,
+        "q_min": -3.14159265359,
+        "q_max": 3.14159265359,
+        "source_note": "Official EB300 DH: a=318mm, alpha=0, d=0."
       },
       {
         "name": "joint4_Z",
         "axis": "Z",
         "a": 0.0,
-        "alpha": 1.5707963267948966,
-        "d": 0.085,
+        "alpha": -1.5707963267948966,
+        "d": 0.122,
         "theta_offset": 0.0,
         "q_min": -3.14159265359,
         "q_max": 3.14159265359,
-        "source_note": "EB300 uses EB15 geometry for simulation: joint order A X Y Z B C, wrist pitch Z."
+        "source_note": "Official EB300 DH: alpha=-90deg, d=122mm."
       },
       {
         "name": "joint5_B",
         "axis": "B",
         "a": 0.0,
         "alpha": 1.5707963267948966,
-        "d": 0.076,
+        "d": 0.099,
         "theta_offset": 0.0,
         "q_min": -3.14159265359,
         "q_max": 3.14159265359,
-        "source_note": "EB300 uses EB15 geometry for simulation: joint order A X Y Z B C, wrist roll B."
+        "source_note": "Official EB300 DH: alpha=+90deg, d=99mm."
       },
       {
         "name": "joint6_C",
         "axis": "C",
         "a": 0.0,
         "alpha": 0.0,
-        "d": 0.043,
+        "d": 0.057,
         "theta_offset": 0.0,
         "q_min": -3.14159265359,
         "q_max": 3.14159265359,
-        "source_note": "EB300 uses EB15 geometry for simulation: tool offset row."
+        "source_note": "Official EB300 DH: d=57mm (tool offset)."
       }
     ]
   },
@@ -328,13 +327,13 @@
     "source": "manual_zero",
     "profile": "EB300",
     "pre_g92_machine_pose": {
-      "X": 0.0,
-      "Y": 0.0,
-      "Z": 0.0,
-      "A": 0.0,
-      "B": 0.0,
+      "X": -10.704,
+      "Y": -92.742,
+      "Z": 26.982,
+      "A": -67.324,
+      "B": 79.951,
       "C": 0.0
     },
-    "timestamp": 1771588949.044756
+    "timestamp": 1772211101.661914
   }
 }

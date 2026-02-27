@@ -518,10 +518,9 @@ class TcpKinematicsFrame(ttk.Frame):
 
     def _get_tool_axis_world(self, roll_deg, pitch_deg, yaw_deg):
         """
-        Computes tool direction from Euler angles (Roll, Pitch, Yaw) in deg.
-        We assume ZYX convention:
-           R = Rz(yaw) * Ry(pitch) * Rx(roll)
-        Tool axis = +Z axis of the tool frame (3. Spalte).
+        Computes tool approach direction from Euler angles (Roll, Pitch, Yaw) in deg.
+        ZYX convention: R = Rz(yaw) * Ry(pitch) * Rx(roll).
+        Returns +Z of the tool frame (third column of R).
         """
         yaw_r = math.radians(yaw_deg)
         pitch_r = math.radians(pitch_deg)
@@ -538,7 +537,7 @@ class TcpKinematicsFrame(ttk.Frame):
             [-sp, cp * sr, cp * cr],
         ]
 
-        # Tool axis = third column of R (Z-axis of tool)
+        # Tool axis = +Z of tool frame (third column of R)
         u = (R[0][2], R[1][2], R[2][2])
         if getattr(self, "_mirror_x", False):
             u = (-u[0], u[1], u[2])
@@ -687,8 +686,9 @@ class TcpKinematicsFrame(ttk.Frame):
         ]
 
     def _task_from_joints(self, joints):
-        # Forward kinematics from DH table. Returns (pos, R).
-        dh = self._read_dh_table()
+        # Forward kinematics using SSOT DH model (same source as fk6_forward_mm).
+        # Bypasses UI StringVars to avoid rounding differences between FK display and IK solver.
+        dh_rows = get_dh_rows_mm_deg()
         dh_axes = self._dh_axes()
         T = [
             [1.0, 0.0, 0.0, 0.0],
@@ -697,13 +697,26 @@ class TcpKinematicsFrame(ttk.Frame):
             [0.0, 0.0, 0.0, 1.0],
         ]
         for i, ax in enumerate(dh_axes):
-            row = dh[i]
+            if i < len(dh_rows):
+                row = dh_rows[i]
+                alpha = float(row.get("alpha_deg", 0.0))
+                a     = float(row.get("a_mm", 0.0))
+                d     = float(row.get("d_mm", 0.0))
+                theta_off = float(row.get("theta_offset_deg", 0.0))
+            else:
+                # Fallback to UI table if DH model has fewer rows than axes
+                dh_ui = self._read_dh_table()
+                row_ui = dh_ui[i] if i < len(dh_ui) else {}
+                alpha = float(row_ui.get("alpha", 0.0))
+                a     = float(row_ui.get("a", 0.0))
+                d     = float(row_ui.get("d", 0.0))
+                theta_off = float(row_ui.get("theta_offset", 0.0))
             model_joint = apply_joint_angle_post_transform(ax, float(joints[i]))
-            th = model_joint + float(row.get("theta_offset", 0.0))
-            Ti = self._dh_transform(th, row["alpha"], row["a"], row["d"])
+            th = model_joint + theta_off
+            Ti = self._dh_transform(th, alpha, a, d)
             T = self._mat_mul(T, Ti)
         x, y, z = T[0][3], T[1][3], T[2][3]
-        if getattr(self, "_mirror_x", False):
+        if bool(get_post_transform().get("mirror_x")):
             x = -x
         R = [
             [T[0][0], T[0][1], T[0][2]],
@@ -768,8 +781,10 @@ class TcpKinematicsFrame(ttk.Frame):
         return out
 
     def _get_current_joint_list(self):
-        """Current joint list in DH_AXES order using ExecuteApp axis_positions."""
-        src = getattr(self.exec, "axis_positions", {}) or {}
+        """Current joint list in DH_AXES order using real MPos (not WPos)."""
+        # Always use _mpos (real machine positions) for IK/FK,
+        # even when the UI shows WPos after G92.
+        src = getattr(self.exec, "_mpos", None) or getattr(self.exec, "axis_positions", {}) or {}
         dh_axes = self._dh_axes()
         joints = []
         for ax in dh_axes:
@@ -874,41 +889,93 @@ class TcpKinematicsFrame(ttk.Frame):
         inv = self._invert_matrix(JTJ)
         return self._mat_mul_generic(inv, JT)
 
+    def _solve_ik_iterative(self, target_pos, target_R, q_init,
+                            max_iters=80, pos_tol=0.05, rot_tol_deg=0.5):
+        """
+        Iterative DLS IK solver. Operates on machine angles (same space as q_init).
+        Returns (joints_list, converged, pos_err_mm, rot_err_deg).
+        Works for any robot defined by the active DH model (Moveo, EB300, ...).
+        Joint clamping inside the loop prevents oscillation and keeps the solver
+        in the same arm configuration as q_init.
+        """
+        joints = list(q_init)
+        dh_axes = self._dh_axes()
+        lims = self._limits()
+        rot_tol_rad = math.radians(rot_tol_deg)
+        max_step = 8.0
+
+        # Normalize wrap-around axes: if a joint sits exactly at the ±180° boundary
+        # the gradient may point outward, locking the solver.  Shift by ±360° so it
+        # starts well away from the hard wall.
+        for _i, _ax in enumerate(dh_axes):
+            if _ax in ("A", "B", "C"):
+                if joints[_i] > 170.0:
+                    joints[_i] -= 360.0
+                elif joints[_i] < -170.0:
+                    joints[_i] += 360.0
+
+        def _n3(v):
+            return math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
+
+        pos_err = 999.0
+        rot_err = 999.0
+        for _ in range(max_iters):
+            J, base_pos, base_R = self._compute_jacobian(joints)
+            d_task = self._pose_error(target_pos, target_R, base_pos, base_R)
+            pos_err = _n3(d_task[:3])
+            if self.rot_weight_mm > 1e-9:
+                rot_err = _n3([
+                    d_task[3] / self.rot_weight_mm,
+                    d_task[4] / self.rot_weight_mm,
+                    d_task[5] / self.rot_weight_mm,
+                ])
+            else:
+                rot_err = _n3(d_task[3:])
+            if pos_err <= pos_tol and rot_err <= rot_tol_rad:
+                break
+            J_inv = self._damped_pinv(J, lam=0.1)
+            d_joint = self._mat_vec_mul(J_inv, d_task)
+            max_abs = max(abs(v) for v in d_joint) if d_joint else 0.0
+            scale = 1.0
+            if max_abs > max_step and max_abs > 1e-9:
+                scale = max_step / max_abs
+            for i in range(len(joints)):
+                joints[i] += d_joint[i] * scale
+                # Clamp to joint limits to prevent oscillation and config jumps
+                ax = dh_axes[i] if i < len(dh_axes) else None
+                if ax:
+                    lo, hi = lims.get(ax, (-360.0, 360.0))
+                    joints[i] = max(lo, min(hi, joints[i]))
+
+        converged = pos_err <= pos_tol and rot_err <= rot_tol_rad
+        return joints, converged, pos_err, math.degrees(rot_err)
+
     @staticmethod
     def _wrap180_deg(a):
         return ((a + 180.0) % 360.0) - 180.0
 
-    def move_tcp_pose(self, x, y, z, roll_deg, pitch_deg, yaw_deg, feed=None, allow_out_of_limits=False):
+    def move_tcp_pose(self, x, y, z, roll_deg, pitch_deg, yaw_deg, feed=None,
+                      allow_out_of_limits=False, max_iters=None):
         """
         Solve a TCP target pose with iterative DLS and send a single absolute G1 move.
+        *max_iters*: override iteration limit (default 80; use ~15 for fast gamepad moves).
         """
         try:
-            # Refresh joint positions from last status if available
+            # Refresh _mpos from last status (always use MPos for IK)
             try:
                 st = getattr(self.client, "last_status", None) or {}
                 mpos = st.get("MPos") or {}
                 if mpos:
-                    for ax, val in mpos.items():
-                        if ax in AXES:
-                            self.exec.axis_positions[ax] = float(val)
+                    mpos_dict = getattr(self.exec, "_mpos", None)
+                    if mpos_dict is not None:
+                        for ax, val in mpos.items():
+                            if ax in AXES:
+                                mpos_dict[ax] = float(val)
                     self._last_tcp_joints = self._get_current_joint_list()
             except Exception:
                 pass
 
             lims = self._limits()
-            # Refresh joint positions from last status if available (keep exec.axis_positions up-to-date)
-            st = {}
-            try:
-                st = getattr(self.client, "last_status", None) or {}
-                mpos = st.get("MPos") or {}
-                if mpos:
-                    for ax, val in mpos.items():
-                        if ax in AXES:
-                            self.exec.axis_positions[ax] = float(val)
-                    # record a snapshot for fallback
-                    self._last_tcp_joints = self._get_current_joint_list()
-            except Exception:
-                pass
 
             # Prefer a one-time provided initial joint guess if set (consumed),
             # otherwise read current joint positions as the initial guess.
@@ -929,38 +996,22 @@ class TcpKinematicsFrame(ttk.Frame):
             target_R = self._rpy_to_R(roll_deg, pitch_deg, yaw_deg)
             target_pos = [x, y, z]
 
-            def _norm3(v):
-                return math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
-
-            max_iters = 15
-            pos_tol = 0.05
-            rot_tol = math.radians(0.5)
-            max_step = 5.0
-
-            for _ in range(max_iters):
-                J, base_pos, base_R = self._compute_jacobian(joints)
-                d_task = self._pose_error(target_pos, target_R, base_pos, base_R)
-                pos_err = _norm3(d_task[:3])
-                if self.rot_weight_mm > 1e-9:
-                    rot_err = _norm3(
-                        [d_task[3] / self.rot_weight_mm,
-                         d_task[4] / self.rot_weight_mm,
-                         d_task[5] / self.rot_weight_mm]
-                    )
-                else:
-                    rot_err = _norm3(d_task[3:])
-                if pos_err <= pos_tol and rot_err <= rot_tol:
-                    break
-                J_inv = self._damped_pinv(J, lam=0.1)
-                d_joint = self._mat_vec_mul(J_inv, d_task)
-                max_abs = max(abs(v) for v in d_joint) if d_joint else 0.0
-                scale = 1.0
-                if max_abs > max_step and max_abs > 1e-9:
-                    scale = max_step / max_abs
-                for i in range(len(joints)):
-                    joints[i] += d_joint[i] * scale
-
+            # Use the shared iterative solver instead of inline iteration
             dh_axes = self._dh_axes()
+            _mi = max_iters if max_iters is not None else 80
+            q_result, _conv, pos_err, rot_err_deg = self._solve_ik_iterative(
+                target_pos, target_R, joints,
+                max_iters=_mi, pos_tol=0.05, rot_tol_deg=0.5,
+            )
+            joints = q_result
+            rot_err = math.radians(rot_err_deg)
+
+            if hasattr(self.exec, "log") and (pos_err > 1.0 or rot_err > math.radians(5.0)):
+                self.exec.log(
+                    f"[IK warn] TCP Move: pos_err={pos_err:.2f}mm rot_err={math.degrees(rot_err):.1f}deg"
+                    f" target=({x:.1f},{y:.1f},{z:.1f})"
+                )
+
             joints_map = {}
             for i, ax in enumerate(dh_axes):
                 joints_map[ax] = joints[i]
@@ -974,8 +1025,13 @@ class TcpKinematicsFrame(ttk.Frame):
 
             F = float(feed) if feed is not None else float(self.feed.get())
             g = "G90 G1 " + " ".join(f"{ax}{joints_map[ax]:.3f}" for ax in dh_axes) + f" F{F:.0f}"
+            _g92_active = getattr(self.exec, "_use_wpos", False)
             try:
+                if _g92_active:
+                    self.client.send_line("G92.1")  # suspend WCO
                 self.client.send_line(g)
+                if _g92_active:
+                    self.client.send_line("G92.3")  # restore WCO
                 if hasattr(self.exec, "log"):
                     self.exec.log(f"TCP Move: {g}")
             except Exception as e:
@@ -984,7 +1040,12 @@ class TcpKinematicsFrame(ttk.Frame):
                 return False
             for ax in AXES:
                 if ax in joints_map:
-                    self.exec.axis_positions[ax] = float(joints_map[ax])
+                    v = float(joints_map[ax])
+                    self.exec.axis_positions[ax] = v
+                    # Also update _mpos (IK sends absolute machine angles)
+                    mpos_dict = getattr(self.exec, "_mpos", None)
+                    if mpos_dict is not None:
+                        mpos_dict[ax] = v
             self._last_tcp_joints = [joints_map[ax] for ax in dh_axes]
             if hasattr(self.exec, "_append_vis_path_kin") and not getattr(self.exec, "_vis_skip_kin", False):
                 try:
@@ -1007,9 +1068,11 @@ class TcpKinematicsFrame(ttk.Frame):
                 st = getattr(self.client, "last_status", None) or {}
                 mpos = st.get("MPos") or {}
                 if mpos:
-                    for ax, val in mpos.items():
-                        if ax in AXES:
-                            self.exec.axis_positions[ax] = float(val)
+                    mpos_dict = getattr(self.exec, "_mpos", None)
+                    if mpos_dict is not None:
+                        for ax, val in mpos.items():
+                            if ax in AXES:
+                                mpos_dict[ax] = float(val)
             except Exception:
                 pass
 
@@ -1021,36 +1084,12 @@ class TcpKinematicsFrame(ttk.Frame):
             target_R = self._rpy_to_R(roll_deg, pitch_deg, yaw_deg)
             target_pos = [x, y, z]
 
-            def _norm3(v):
-                return math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
-
-            max_iters = 15
-            pos_tol = 0.05
-            rot_tol = math.radians(0.5)
-            max_step = 5.0
-
-            for _ in range(max_iters):
-                J, base_pos, base_R = self._compute_jacobian(joints)
-                d_task = self._pose_error(target_pos, target_R, base_pos, base_R)
-                pos_err = _norm3(d_task[:3])
-                if self.rot_weight_mm > 1e-9:
-                    rot_err = _norm3(
-                        [d_task[3] / self.rot_weight_mm,
-                         d_task[4] / self.rot_weight_mm,
-                         d_task[5] / self.rot_weight_mm]
-                    )
-                else:
-                    rot_err = _norm3(d_task[3:])
-                if pos_err <= pos_tol and rot_err <= rot_tol:
-                    break
-                J_inv = self._damped_pinv(J, lam=0.1)
-                d_joint = self._mat_vec_mul(J_inv, d_task)
-                max_abs = max(abs(v) for v in d_joint) if d_joint else 0.0
-                scale = 1.0
-                if max_abs > max_step and max_abs > 1e-9:
-                    scale = max_step / max_abs
-                for i in range(len(joints)):
-                    joints[i] += d_joint[i] * scale
+            # Use the shared iterative solver
+            q_result, _conv, _pe, _re = self._solve_ik_iterative(
+                target_pos, target_R, joints,
+                max_iters=80, pos_tol=0.05, rot_tol_deg=0.5,
+            )
+            joints = q_result
 
             dh_axes = self._dh_axes()
             joints_map = {}
@@ -1272,13 +1311,19 @@ class TcpKinematicsFrame(ttk.Frame):
             lims = self._limits()
             F = float(self.feed.get())
 
+            # If G92 offset is active, suspend it so IK moves use MPos coordinates.
+            _g92_active = getattr(self.exec, "_use_wpos", False)
             lines = [
                 "; ---- TCP Sequence ----",
                 "G21",
                 "G90",
                 "G94",
-                f"; Anchor={anchor}  Zero=({P_zero[0]:.3f},{P_zero[1]:.3f},{P_zero[2]:.3f})",
             ]
+            if _g92_active:
+                lines.append("G92.1 ; suspend WCO for IK moves")
+            lines.append(
+                f"; Anchor={anchor}  Zero=({P_zero[0]:.3f},{P_zero[1]:.3f},{P_zero[2]:.3f})"
+            )
             bad = []
 
             # 5) Pre-GCode (optional)
@@ -1291,57 +1336,79 @@ class TcpKinematicsFrame(ttk.Frame):
                     lines.append(s)
                     bad.append(False)
 
-            # Jacobian setup (dX = J * dQ)
+            # Iterative IK – warm-start from current joints, chain P_ret→P_tar→P_ret
             base_joints = self._get_current_joint_list()
-            J, base_pos, base_R = self._compute_jacobian(base_joints)
-            J_inv = self._damped_pinv(J, lam=0.1)
             target_R = self._rpy_to_R(roll_pose, pitch_pose, yaw)
 
-            def to_line(P, rapid):
-                d_task = self._pose_error([P[0], P[1], P[2]], target_R, base_pos, base_R)
-                d_joint = self._mat_vec_mul(J_inv, d_task)
-                j = {}
+            # --- IK diagnostics: log FK at start joints ---
+            if hasattr(self.exec, "log"):
+                fk_pos, fk_R = self._task_from_joints(base_joints)
+                axes_str = " ".join(
+                    f"{ax}={base_joints[i]:.2f}" for i, ax in enumerate(self._dh_axes())
+                )
+                self.exec.log(
+                    f"[IK diag] start joints: {axes_str}"
+                )
+                self.exec.log(
+                    f"[IK diag] FK at start: X={fk_pos[0]:.2f} Y={fk_pos[1]:.2f} Z={fk_pos[2]:.2f}mm"
+                )
+                self.exec.log(
+                    f"[IK diag] target: P_ret={P_ret} P_tar={P_tar}"
+                )
+                self.exec.log(
+                    f"[IK diag] mask RPY: Roll={roll_pose:.2f} Pitch={pitch_pose:.2f} Yaw={yaw:.2f} deg"
+                )
+                _u_raw = self._get_tool_axis_world(roll_pose, pitch_pose, yaw)
+                _u_final = (-_u_raw[0], -_u_raw[1], -_u_raw[2]) if self.invert_u.get() else _u_raw
+                self.exec.log(
+                    f"[IK diag] tool axis u=({_u_final[0]:.3f},{_u_final[1]:.3f},{_u_final[2]:.3f})"
+                    f"  mirror_x={getattr(self,'_mirror_x',False)}  invert_u={self.invert_u.get()}"
+                )
+                self.exec.log(
+                    f"[IK diag] anchor={anchor}  Dret={Dret}  Dwork={Dwork}"
+                )
+
+            def solve_to(P, q_start, label=""):
+                q, conv, pe, re = self._solve_ik_iterative(
+                    [P[0], P[1], P[2]], target_R, q_start
+                )
+                j_map = {}
                 for i, ax in enumerate(self._dh_axes()):
-                    j[ax] = base_joints[i] + d_joint[i]
-                ok = self._check_limits(j, lims)
-                # Use controlled feed moves only; rapid with rotary joints can trigger controller alarms.
+                    j_map[ax] = q[i]
+                ok = self._check_limits(j_map, lims)
+                if hasattr(self.exec, "log"):
+                    status = "OK" if conv else "NOT CONVERGED"
+                    result_str = " ".join(f"{ax}={j_map[ax]:.2f}" for ax in self._dh_axes())
+                    self.exec.log(
+                        f"[IK diag] {label} ({P[0]:.1f},{P[1]:.1f},{P[2]:.1f}): "
+                        f"{status} pos={pe:.2f}mm rot={re:.1f}deg | {result_str}"
+                    )
                 g = "G1 " + " ".join(
-                    f"{ax}{j[ax]:.3f}" for ax in self._dh_axes()
+                    f"{ax}{j_map[ax]:.3f}" for ax in self._dh_axes()
                 )
                 g += f" F{F:.0f}"
-                return g, ok, j
+                return g, ok, q
 
             # RET
             if anchor == "retreat":
+                # Current position IS the retreat point – skip the G1 move
+                # to avoid a tiny unwanted movement due to rounding.
+                q_ret = list(base_joints)
                 j_ret = {ax: base_joints[i] for i, ax in enumerate(self._dh_axes())}
                 ok = self._check_limits(j_ret, lims)
-                g = "G1 " + " ".join(f"{ax}{j_ret[ax]:.3f}" for ax in self._dh_axes()) + f" F{F:.0f}"
+                lines.append(
+                    "; RET = current pos (no move) "
+                    + " ".join(f"{ax}{j_ret[ax]:.3f}" for ax in self._dh_axes())
+                )
+                bad.append(not ok)
             else:
-                g, ok, j_ret = to_line(P_ret, True)
-            lines.append(g)
-            bad.append(not ok)
+                g, ok, q_ret = solve_to(P_ret, base_joints, label="RET")
+                j_ret = {ax: q_ret[i] for i, ax in enumerate(self._dh_axes())}
+                lines.append(g)
+                bad.append(not ok)
 
-            # DH plausibility hint:
-            # For anchor=retreat, first move should be ~current joint state.
-            if anchor == "retreat":
-                cur = {ax: base_joints[i] for i, ax in enumerate(self._dh_axes())}
-                dmax = 0.0
-                for ax in self._dh_axes():
-                    d = abs(float(j_ret.get(ax, 0.0)) - float(cur.get(ax, 0.0)))
-                    if d > dmax:
-                        dmax = d
-                if hasattr(self.exec, "log"):
-                    self.exec.log(f"Kinematics check (retreat): joint_max={dmax:.3f}")
-                    if dmax > 0.5:
-                        self.exec.log(" Retreat start differs from current pose -> DH/offset mismatch likely.")
-                    if dmax > 5.0:
-                        raise RuntimeError(
-                            f"Retreat start mismatch too large (joint_max={dmax:.2f}). "
-                            "Sequence aborted for safety."
-                        )
-
-            # TAR
-            g, ok, _j_tar = to_line(P_tar, False)
+            # TAR – warm-start from RET solution
+            g, ok, q_tar = solve_to(P_tar, q_ret, label="TAR")
             lines.append(g)
             bad.append(not ok)
 
@@ -1362,8 +1429,8 @@ class TcpKinematicsFrame(ttk.Frame):
                     lines.append(f"G4 P{after_ms/1000.0:.3f}")
                     bad.append(False)
 
-            # RET BACK (safety non-rapid)
-            g, ok, _j_ret2 = to_line(P_ret, False)
+            # RET BACK – warm-start from TAR solution
+            g, ok, _q_ret2 = solve_to(P_ret, q_tar, label="RET_BACK")
             lines.append(g)
             bad.append(not ok)
 
@@ -1377,6 +1444,9 @@ class TcpKinematicsFrame(ttk.Frame):
                     lines.append(s)
                     bad.append(False)
 
+            if _g92_active:
+                lines.append("G92.3 ; restore WCO")
+                bad.append(False)
             lines.append("; ---- END ----")
             bad.append(False)
 
@@ -1557,7 +1627,8 @@ class TcpWorldKinematicsTabs(ttk.Frame):
         # Alias (ExecuteApp sucht teils danach)
         return self.solve_and_execute_sequence()
 
-    def move_tcp_pose(self, x, y, z, roll_deg, pitch_deg, yaw_deg, feed=None, allow_out_of_limits=False):
+    def move_tcp_pose(self, x, y, z, roll_deg, pitch_deg, yaw_deg, feed=None,
+                      allow_out_of_limits=False, max_iters=None):
         if hasattr(self.world, "move_tcp_pose"):
             return self.world.move_tcp_pose(
                 x,
@@ -1568,6 +1639,7 @@ class TcpWorldKinematicsTabs(ttk.Frame):
                 yaw_deg,
                 feed,
                 allow_out_of_limits=allow_out_of_limits,
+                max_iters=max_iters,
             )
         return None
 

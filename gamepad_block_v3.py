@@ -688,7 +688,8 @@ def attach_gamepad_tab(tab_gamepad, client, execute_app):
                 if fixed_enabled:
                     gp_var = getattr(execute_app, "fixed_tcp_gamepad_mode", None)
                     gp_mode = bool(gp_var.get()) if gp_var is not None else False
-                    if gp_mode and (now - last_fixed_gp_time >= poll_dt):
+                    _tcp_dt = 0.06  # 60ms ≈ 16 Hz for TCP IK moves
+                    if gp_mode and (now - last_fixed_gp_time >= _tcp_dt):
                         _xy_step = 2.0
                         _z_step = 1.0
                         try:
