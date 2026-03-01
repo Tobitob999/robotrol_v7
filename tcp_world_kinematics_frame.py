@@ -790,10 +790,16 @@ class TcpKinematicsFrame(ttk.Frame):
         return out
 
     def _get_current_joint_list(self):
-        """Current joint list in DH_AXES order using real MPos (not WPos)."""
-        # Always use _mpos (real machine positions) for IK/FK,
-        # even when the UI shows WPos after G92.
-        src = getattr(self.exec, "_mpos", None) or getattr(self.exec, "axis_positions", {}) or {}
+        """Current joint list in DH_AXES order.
+        After G92 (virtual hard reset): uses WPos (= MPos - WCO),
+        otherwise: uses real MPos."""
+        if getattr(self.exec, "_use_wpos", False):
+            # G92 active: use WPos — same reference frame as after power-cycle
+            mpos = getattr(self.exec, "_mpos", {})
+            wco = getattr(self.exec, "_wco", {})
+            src = {ax: mpos.get(ax, 0.0) - wco.get(ax, 0.0) for ax in mpos}
+        else:
+            src = getattr(self.exec, "_mpos", None) or getattr(self.exec, "axis_positions", {}) or {}
         dh_axes = self._dh_axes()
         joints = []
         for ax in dh_axes:
@@ -1109,13 +1115,8 @@ class TcpKinematicsFrame(ttk.Frame):
 
             F = float(feed) if feed is not None else float(self.feed.get())
             g = "G90 G1 " + " ".join(f"{ax}{joints_map[ax]:.3f}" for ax in dh_axes) + f" F{F:.0f}"
-            _g92_active = getattr(self.exec, "_use_wpos", False)
             try:
-                if _g92_active:
-                    self.client.send_line("G92.1")  # suspend WCO
                 self.client.send_line(g)
-                if _g92_active:
-                    self.client.send_line("G92.3")  # restore WCO
                 if hasattr(self.exec, "log"):
                     self.exec.log(f"TCP Move: {g}")
             except Exception as e:
@@ -1126,7 +1127,7 @@ class TcpKinematicsFrame(ttk.Frame):
                 if ax in joints_map:
                     v = float(joints_map[ax])
                     self.exec.axis_positions[ax] = v
-                    # Also update _mpos (IK sends absolute machine angles)
+                    # Also update _mpos (WPos after G92, else MPos)
                     mpos_dict = getattr(self.exec, "_mpos", None)
                     if mpos_dict is not None:
                         mpos_dict[ax] = v
@@ -1395,16 +1396,12 @@ class TcpKinematicsFrame(ttk.Frame):
             lims = self._limits()
             F = float(self.feed.get())
 
-            # If G92 offset is active, suspend it so IK moves use MPos coordinates.
-            _g92_active = getattr(self.exec, "_use_wpos", False)
             lines = [
                 "; ---- TCP Sequence ----",
                 "G21",
                 "G90",
                 "G94",
             ]
-            if _g92_active:
-                lines.append("G92.1 ; suspend WCO for IK moves")
             lines.append(
                 f"; Anchor={anchor}  Zero=({P_zero[0]:.3f},{P_zero[1]:.3f},{P_zero[2]:.3f})"
             )
@@ -1528,9 +1525,6 @@ class TcpKinematicsFrame(ttk.Frame):
                     lines.append(s)
                     bad.append(False)
 
-            if _g92_active:
-                lines.append("G92.3 ; restore WCO")
-                bad.append(False)
             lines.append("; ---- END ----")
             bad.append(False)
 

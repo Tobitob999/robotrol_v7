@@ -359,7 +359,12 @@ class SerialClient:
                         except ValueError:
                             pass
 
-        pose_src = mpos or wpos
+        # After G92 (virtual hard reset): return WPos so TCP panel FK matches zeroed axes
+        if getattr(self, "_use_wpos_for_parse", False) and mpos:
+            wco = getattr(self, "_wco_cache", {})
+            pose_src = {ax: mpos[ax] - wco.get(ax, 0.0) for ax in mpos}
+        else:
+            pose_src = mpos or wpos
         for ax, val in pose_src.items():
             positions[ax] = val
 
@@ -4885,6 +4890,8 @@ $Report/Startup     - Show startup file loaded at boot
             if g.strip().startswith("$H"):
                 self._use_wpos = False
                 self._wco = {ax: 0.0 for ax in AXES}
+                self.client._use_wpos_for_parse = False
+                self.client._wco_cache = {}
             self.client.send_line(g)
             self.log("TX: " + g)
         except Exception as e:
@@ -5282,6 +5289,12 @@ $Report/Startup     - Show startup file loaded at boot
                 self._wco[ax] = self._mpos.get(ax, 0.0)
             self.client.send_line("G92 X0 Y0 Z0 A0 B0 C0")
             self._use_wpos = True       # show computed WPos from now on
+            # Virtual hard reset: _mpos tracks WPos (all zero) from now on
+            for ax in AXES:
+                self._mpos[ax] = 0.0
+            # Propagate to client so parse_status_line() returns WPos to TCP panel
+            self.client._use_wpos_for_parse = True
+            self.client._wco_cache = dict(self._wco)
             for ax in AXES:
                 self.axis_positions[ax] = 0.0
                 if ax in self.axis_vars:
@@ -5457,6 +5470,8 @@ $Report/Startup     - Show startup file loaded at boot
         # Ctrl+X clears G92 on the controller → reset WCO state
         self._use_wpos = False
         self._wco = {ax: 0.0 for ax in AXES}
+        self.client._use_wpos_for_parse = False
+        self.client._wco_cache = {}
         try:
             self.client.send_ctrl_x()  # hard reset is intentional here
             self.log(" Ctrl-X (reset) sent")
@@ -5598,6 +5613,8 @@ $Report/Startup     - Show startup file loaded at boot
         if line.startswith("Grbl ") or line.startswith("ALARM"):
             self._use_wpos = False
             self._wco = {ax: 0.0 for ax in AXES}
+            self.client._use_wpos_for_parse = False
+            self.client._wco_cache = {}
 
         # $$ soft-limit parser (works for FluidNC and GRBL)
         for ax, rx in SOFTMAX_RE.items():
@@ -5681,11 +5698,14 @@ $Report/Startup     - Show startup file loaded at boot
                             c2.itemconfig(oval2, fill=color)
                             self.endstop_indicators[ax] = (c2, oval2, new_state)
 
-            # --- Always keep _mpos updated from MPos (for IK/FK) ---
+            # --- Keep _mpos updated (WPos when G92 active, else real MPos) ---
             if mpos:
                 for ax, val in mpos.items():
                     if ax in AXES:
-                        self._mpos[ax] = val
+                        if self._use_wpos:
+                            self._mpos[ax] = val - self._wco.get(ax, 0.0)
+                        else:
+                            self._mpos[ax] = val
 
             # --- Achspositionen aktualisieren (UI display) ---
             # After G92 we must show WPos (MPos is unchanged by G92).
