@@ -234,7 +234,7 @@
         "theta_offset": 0.0,
         "q_min": -3.14159265359,
         "q_max": 3.14159265359,
-        "source_note": "Official EB300 DH: alpha=-90deg, d=95mm, a=0."
+        "source_note": "Set per provided DH table: theta=0, alpha=+90deg, d=L1, a=0."
       },
       {
         "name": "joint2_X",
@@ -245,7 +245,7 @@
         "theta_offset": 0.0,
         "q_min": -3.14159265359,
         "q_max": 3.14159265359,
-        "source_note": "Official EB300 DH: a=348mm, alpha=0, d=0, theta_offset=0."
+        "source_note": "Set per provided DH table: theta=+90deg, alpha=0, d=0, a=L2."
       },
       {
         "name": "joint3_Y",
@@ -256,10 +256,10 @@
         "theta_offset": 0.0,
         "q_min": -3.14159265359,
         "q_max": 3.14159265359,
-        "source_note": "Official EB300 DH: a=318mm, alpha=0, d=0."
+        "source_note": "Set per provided DH table: theta=-90deg, alpha=-90deg, d=0, a=0."
       },
       {
-        "name": "joint4_Z",
+        "name": "joint5_Z",
         "axis": "Z",
         "a": 0.0,
         "alpha": -1.5707963267948966,
@@ -267,10 +267,10 @@
         "theta_offset": 0.0,
         "q_min": -3.14159265359,
         "q_max": 3.14159265359,
-        "source_note": "Official EB300 DH: alpha=-90deg, d=122mm."
+        "source_note": "Set per provided DH table: theta=0, alpha=-90deg, d=0, a=0."
       },
       {
-        "name": "joint5_B",
+        "name": "joint4_B",
         "axis": "B",
         "a": 0.0,
         "alpha": 1.5707963267948966,
@@ -278,7 +278,7 @@
         "theta_offset": 0.0,
         "q_min": -3.14159265359,
         "q_max": 3.14159265359,
-        "source_note": "Official EB300 DH: alpha=+90deg, d=99mm."
+        "source_note": "Set per provided DH table: theta=0, alpha=+90deg, d=L3, a=0."
       },
       {
         "name": "joint6_C",
@@ -289,7 +289,7 @@
         "theta_offset": 0.0,
         "q_min": -3.14159265359,
         "q_max": 3.14159265359,
-        "source_note": "Official EB300 DH: d=57mm (tool offset)."
+        "source_note": "Set per provided DH table: theta=0, alpha=0, d=L4, a=0."
       }
     ]
   },
@@ -327,13 +327,28 @@
     "source": "manual_zero",
     "profile": "EB300",
     "pre_g92_machine_pose": {
-      "X": -10.704,
-      "Y": -92.742,
-      "Z": 26.982,
-      "A": -67.324,
-      "B": 79.951,
+      "X": 1.905,
+      "Y": 15.893,
+      "Z": 1.395,
+      "A": -0.006,
+      "B": 133.752,
       "C": 0.0
     },
-    "timestamp": 1772211101.661914
+    "timestamp": 1772378324.916252
+  },
+  "kinematics_settings": {
+    "kinematics": {
+      "D_ret": 20.0,
+      "D_work": 30.0,
+      "feed": 3000.0,
+      "pitch_override": 0.0,
+      "roll_override": 0.0,
+      "invert_u": false,
+      "anchor_mode": "retreat",
+      "use_gripper": false,
+      "grip_s": 1000,
+      "grip_pause_before_ms": 0,
+      "grip_pause_after_ms": 0
+    }
   }
 }

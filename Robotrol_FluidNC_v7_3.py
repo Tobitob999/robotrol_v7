@@ -190,6 +190,12 @@ def _profile_has_endstops(profile_name, profile_data):
         return False
     return True
 
+_RE_HOMING_CMD = re.compile(r"^\$H([XYZABC])?$", re.IGNORECASE)
+
+def _is_homing_command(cmd: str) -> bool:
+    """Return True if cmd is a hardware homing command ($H, $HX, $HY, ...)."""
+    return bool(_RE_HOMING_CMD.match((cmd or "").strip()))
+
 def map_speed(val_0_1000: int) -> int:
     """Linear: 01000  0MAX_FEED."""
     val = max(0, min(1000, int(val_0_1000)))
@@ -789,7 +795,8 @@ class ExecuteApp(ttk.Frame):
         # State
         self.axis_positions = {ax: 0.0 for ax in AXES}
         self._mpos = {ax: 0.0 for ax in AXES}  # always MPos (for IK/FK)
-        self._use_wpos = False          # True after G92 → display WPos
+        self._wco  = {ax: 0.0 for ax in AXES}  # Work Coordinate Offset (from WCO: field)
+        self._use_wpos = False          # True after G92 → display WPos (computed from MPos-WCO)
         self._user_editing = {ax: False for ax in AXES}
         self.mode_absolute = tk.BooleanVar(value=True)
         self.live_move = tk.BooleanVar(value=True)
@@ -821,6 +828,10 @@ class ExecuteApp(ttk.Frame):
         self._build_ui()
         self._apply_profile_runtime_flags(log_note=False)
         self._send_vis_robot_profile()
+        try:
+            self.load_all_kinematics_settings()
+        except Exception:
+            pass
 
         # Worker-Thread
         self.worker_thread = threading.Thread(target=self.worker, daemon=True)
@@ -1105,6 +1116,9 @@ class ExecuteApp(ttk.Frame):
         self.fixed_tcp_gamepad_mode = tk.BooleanVar(value=False)
         self.fixed_tcp_gp_xy_step = tk.DoubleVar(value=2.0)
         self.fixed_tcp_gp_z_step = tk.DoubleVar(value=1.0)
+        self.fixed_tcp_gp_invert_x = tk.BooleanVar(value=False)
+        self.fixed_tcp_gp_invert_y = tk.BooleanVar(value=False)
+        self.fixed_tcp_gp_invert_z = tk.BooleanVar(value=False)
         self._vis_path_fixed = []
         self._vis_path_kin = []
         self._vis_fixed_frame = None
@@ -1353,6 +1367,17 @@ class ExecuteApp(ttk.Frame):
         btn_gp_test = ttk.Button(gp_sens_frame, text="Test \u25b6", command=_gp_test_go)
         btn_gp_test.pack(side=tk.LEFT)
         fixed_mode_widgets.append(btn_gp_test)
+
+        row_gp_inv = ttk.Frame(fixed_wrap)
+        row_gp_inv.pack(fill=tk.X, padx=4, pady=(0, 2))
+        ttk.Label(row_gp_inv, text="Invert Gamepad:", foreground="gray").pack(side=tk.LEFT, padx=(0, 4))
+        chk_inv_x = ttk.Checkbutton(row_gp_inv, text="X", variable=self.fixed_tcp_gp_invert_x)
+        chk_inv_x.pack(side=tk.LEFT, padx=(0, 6))
+        chk_inv_y = ttk.Checkbutton(row_gp_inv, text="Y", variable=self.fixed_tcp_gp_invert_y)
+        chk_inv_y.pack(side=tk.LEFT, padx=(0, 6))
+        chk_inv_z = ttk.Checkbutton(row_gp_inv, text="Z", variable=self.fixed_tcp_gp_invert_z)
+        chk_inv_z.pack(side=tk.LEFT, padx=(0, 6))
+        fixed_mode_widgets.extend([chk_inv_x, chk_inv_y, chk_inv_z])
 
         row_mode = ttk.Frame(fixed_wrap)
         row_mode.pack(fill=tk.X, padx=4, pady=(2, 2))
@@ -4399,6 +4424,10 @@ $Report/Startup     - Show startup file loaded at boot
                 pass
         self._apply_profile_runtime_flags(log_note=True)
         self._send_vis_robot_profile()
+        try:
+            self.load_all_kinematics_settings()
+        except Exception:
+            pass
 
     def get_gamepad_config(self):
         data = self.get_profile_section("gamepad", default={})
@@ -4426,12 +4455,96 @@ $Report/Startup     - Show startup file loaded at boot
             self.tcp_panel.set_geom_dh(self.GEOM_DH)
         return True, "DH parameters saved to profile and reloaded."
 
+    # -------------------------------------------------
+    # Fixed TCP + Kinematics settings  save / load
+    # -------------------------------------------------
+    def get_fixed_tcp_settings(self):
+        """Collect all saveable Fixed TCP settings into a dict."""
+        return {
+            "enabled": self.fixed_tcp_enabled.get(),
+            "roll": self.fixed_tcp_roll.get(),
+            "pitch": self.fixed_tcp_pitch.get(),
+            "yaw": self.fixed_tcp_yaw.get(),
+            "step": self.fixed_tcp_step.get(),
+            "feed": self.fixed_tcp_feed.get(),
+            "exec_on_release": self.fixed_tcp_exec_on_release.get(),
+            "tcp_gcode_mode": self.tcp_gcode_mode.get(),
+            "mode": self.fixed_tcp_mode.get(),
+            "gamepad_mode": self.fixed_tcp_gamepad_mode.get(),
+            "gp_xy_step": self.fixed_tcp_gp_xy_step.get(),
+            "gp_z_step": self.fixed_tcp_gp_z_step.get(),
+            "max_dist": self.fixed_tcp_max_dist.get(),
+            "point_dx": self.fixed_tcp_point_dx.get(),
+            "point_dy": self.fixed_tcp_point_dy.get(),
+            "point_dz": self.fixed_tcp_point_dz.get(),
+            "gp_invert_x": self.fixed_tcp_gp_invert_x.get(),
+            "gp_invert_y": self.fixed_tcp_gp_invert_y.get(),
+            "gp_invert_z": self.fixed_tcp_gp_invert_z.get(),
+        }
+
+    def apply_fixed_tcp_settings(self, data):
+        """Restore Fixed TCP settings from a dict."""
+        if not isinstance(data, dict):
+            return
+        def _s(var, key, conv=float):
+            if key in data:
+                try:
+                    var.set(conv(data[key]))
+                except Exception:
+                    pass
+        _s(self.fixed_tcp_enabled, "enabled", bool)
+        _s(self.fixed_tcp_roll, "roll")
+        _s(self.fixed_tcp_pitch, "pitch")
+        _s(self.fixed_tcp_yaw, "yaw")
+        _s(self.fixed_tcp_step, "step")
+        _s(self.fixed_tcp_feed, "feed")
+        _s(self.fixed_tcp_exec_on_release, "exec_on_release", bool)
+        _s(self.tcp_gcode_mode, "tcp_gcode_mode", bool)
+        if "mode" in data:
+            self.fixed_tcp_mode.set(str(data["mode"]))
+        _s(self.fixed_tcp_gamepad_mode, "gamepad_mode", bool)
+        _s(self.fixed_tcp_gp_xy_step, "gp_xy_step")
+        _s(self.fixed_tcp_gp_z_step, "gp_z_step")
+        _s(self.fixed_tcp_max_dist, "max_dist")
+        _s(self.fixed_tcp_point_dx, "point_dx")
+        _s(self.fixed_tcp_point_dy, "point_dy")
+        _s(self.fixed_tcp_point_dz, "point_dz")
+        _s(self.fixed_tcp_gp_invert_x, "gp_invert_x", bool)
+        _s(self.fixed_tcp_gp_invert_y, "gp_invert_y", bool)
+        _s(self.fixed_tcp_gp_invert_z, "gp_invert_z", bool)
+
+    def save_all_kinematics_settings(self):
+        """Save kinematics tab + fixed TCP settings to the active profile."""
+        payload = {"fixed_tcp": self.get_fixed_tcp_settings()}
+        if hasattr(self, "kinematics_tabs"):
+            payload["kinematics"] = self.kinematics_tabs.get_settings()
+        self.set_profile_section("kinematics_settings", payload, save=True)
+        self.log("Kinematics + Fixed TCP settings saved to profile.")
+
+    def load_all_kinematics_settings(self):
+        """Load kinematics tab + fixed TCP settings from the active profile."""
+        payload = self.get_profile_section("kinematics_settings", default=None)
+        if not isinstance(payload, dict):
+            return
+        # Kinematics tab settings
+        kin = payload.get("kinematics")
+        if isinstance(kin, dict) and hasattr(self, "kinematics_tabs"):
+            self.kinematics_tabs.apply_settings(kin)
+        # Fixed TCP settings
+        ftcp = payload.get("fixed_tcp")
+        if isinstance(ftcp, dict):
+            self.apply_fixed_tcp_settings(ftcp)
+
     def _apply_profile_runtime_flags(self, log_note=True):
         self.profile_has_endstops = _profile_has_endstops(self.profile_name, self.profile_data)
         axis_home_attr = getattr(self.client, "supports_axis_homing", False)
         can_axis_home = bool(axis_home_attr() if callable(axis_home_attr) else axis_home_attr)
         global_home_attr = getattr(self.client, "supports_global_homing", True)
         can_global_home = bool(global_home_attr() if callable(global_home_attr) else global_home_attr)
+        # --- Homing safety lock: override if profile has no endstops ---
+        if not self.profile_has_endstops:
+            can_axis_home = False
+            can_global_home = False
         for btn in getattr(self, "_homing_global_buttons", []):
             try:
                 btn.configure(state=("normal" if can_global_home else "disabled"))
@@ -4443,7 +4556,8 @@ $Report/Startup     - Show startup file loaded at boot
             except Exception:
                 pass
         if log_note and hasattr(self, "log") and not self.profile_has_endstops:
-            self.log("Profile without endstops: run 'Zero (G92)' after manual zeroing.")
+            self.log(f"Homing DISABLED for '{self.profile_name}' (no endstops). "
+                     f"Use 'Zero (G92)' after manual zeroing.")
 
     def _send_vis_robot_profile(self):
         if not UDP_MIRROR or not getattr(self.client, "udp_sock", None):
@@ -4756,9 +4870,21 @@ $Report/Startup     - Show startup file loaded at boot
         try:
             if self._handle_tcp_gcode(g, source="CLI"):
                 return
+            # --- Homing safety lock ---
+            if _is_homing_command(g) and not self.profile_has_endstops:
+                self.log(f"BLOCKED: Homing '{g.strip()}' disabled for "
+                         f"'{self.profile_name}' (no endstops).")
+                messagebox.showwarning(
+                    "Homing Disabled",
+                    f"Homing is disabled for '{self.profile_name}'.\n\n"
+                    f"This robot has no endstops. Homing would cause "
+                    f"uncontrolled motion and may damage the robot.\n\n"
+                    f"Use 'Zero (G92)' to set the current position as home.")
+                return
             # Homing resets work coordinates → switch back to MPos display
             if g.strip().startswith("$H"):
                 self._use_wpos = False
+                self._wco = {ax: 0.0 for ax in AXES}
             self.client.send_line(g)
             self.log("TX: " + g)
         except Exception as e:
@@ -4798,6 +4924,12 @@ $Report/Startup     - Show startup file loaded at boot
         cmd = self.entry_cmd.get().strip()
         if not cmd: return "break"
         self._add_to_history(cmd)
+        # --- Homing safety lock ---
+        if _is_homing_command(cmd) and not self.profile_has_endstops:
+            self.log(f"BLOCKED: Homing '{cmd}' disabled for "
+                     f"'{self.profile_name}' (no endstops).")
+            self.entry_cmd.delete(0, tk.END)
+            return "break"
         try:
             self.client.send_line(cmd)
             self.log(f"TX (CLI ): {cmd}")
@@ -4842,6 +4974,11 @@ $Report/Startup     - Show startup file loaded at boot
                     s = s.split(";", 1)[0].strip()
                     s = re.sub(r"\(.*(TM)\)", "", s).strip()
                     if not s:
+                        continue
+                    # --- Homing safety lock ---
+                    if _is_homing_command(s) and not self.profile_has_endstops:
+                        self.log(f"BLOCKED: Homing '{s}' disabled for "
+                                 f"'{self.profile_name}' (no endstops).")
                         continue
                     if self._handle_tcp_gcode(s, source="CLI"):
                         self._add_to_history(ln)
@@ -5139,8 +5276,12 @@ $Report/Startup     - Show startup file loaded at boot
     def do_zero(self, persist_reference=False, source="zero"):
         try:
             pre_pose = {ax: float(self.axis_positions.get(ax, 0.0)) for ax in AXES}
+            # Pre-set WCO to current MPos so WPos=0 immediately
+            # (before FluidNC sends the WCO: field in the next status report)
+            for ax in AXES:
+                self._wco[ax] = self._mpos.get(ax, 0.0)
             self.client.send_line("G92 X0 Y0 Z0 A0 B0 C0")
-            self._use_wpos = True       # show WPos from now on
+            self._use_wpos = True       # show computed WPos from now on
             for ax in AXES:
                 self.axis_positions[ax] = 0.0
                 if ax in self.axis_vars:
@@ -5313,6 +5454,9 @@ $Report/Startup     - Show startup file loaded at boot
         self.run_event.clear()
         self.paused = False
         self._awaiting_ack = False
+        # Ctrl+X clears G92 on the controller → reset WCO state
+        self._use_wpos = False
+        self._wco = {ax: 0.0 for ax in AXES}
         try:
             self.client.send_ctrl_x()  # hard reset is intentional here
             self.log(" Ctrl-X (reset) sent")
@@ -5355,6 +5499,12 @@ $Report/Startup     - Show startup file loaded at boot
                 if "G1" in g or "G0" in g:
                     import re
                     g = re.sub(r"F[0-9\.]+", f"F{f_now}", g) if "F" in g else f"{g} F{f_now}"
+
+                # --- Homing safety lock ---
+                if _is_homing_command(g) and not self.profile_has_endstops:
+                    self.log(f"[{i}/{len(lines)}] BLOCKED: Homing '{g}' "
+                             f"disabled for '{self.profile_name}' (no endstops). Skipped.")
+                    continue
 
                 self.current_cmd = g
                 self._awaiting_ack = True
@@ -5444,6 +5594,11 @@ $Report/Startup     - Show startup file loaded at boot
             return
 
 
+        # Controller reboot / alarm clears G92 → reset WCO state
+        if line.startswith("Grbl ") or line.startswith("ALARM"):
+            self._use_wpos = False
+            self._wco = {ax: 0.0 for ax in AXES}
+
         # $$ soft-limit parser (works for FluidNC and GRBL)
         for ax, rx in SOFTMAX_RE.items():
             m = rx.match(line)
@@ -5495,6 +5650,15 @@ $Report/Startup     - Show startup file loaded at boot
                             except ValueError:
                                 pass
 
+                elif part.startswith("WCO:"):
+                    nums = part[4:].split(",")
+                    for idx, ax in enumerate(AXES):
+                        if idx < len(nums):
+                            try:
+                                self._wco[ax] = float(nums[idx])
+                            except ValueError:
+                                pass
+
                 elif part.startswith("Pn:") and self.client.supports_endstops:
                     endstop_active = set(part[3:])
 
@@ -5527,6 +5691,10 @@ $Report/Startup     - Show startup file loaded at boot
             # After G92 we must show WPos (MPos is unchanged by G92).
             if self._use_wpos and wpos:
                 pose_src = wpos
+            elif self._use_wpos and mpos:
+                # FluidNC $10=1 doesn't send WPos — compute from WCO
+                pose_src = {ax: mpos[ax] - self._wco.get(ax, 0.0)
+                            for ax in mpos}
             else:
                 pose_src = mpos or wpos
             abs_pose = {}
@@ -5544,8 +5712,12 @@ $Report/Startup     - Show startup file loaded at boot
             if updated:
                 self.update_position_display()
 
-            # keep status for other parts
-            self.client.last_status = {"state": state, "MPos": mpos, "WPos": wpos}
+            # keep status for other parts (include computed WPos if needed)
+            effective_wpos = wpos
+            if not effective_wpos and self._use_wpos and mpos:
+                effective_wpos = {ax: mpos[ax] - self._wco.get(ax, 0.0)
+                                  for ax in mpos}
+            self.client.last_status = {"state": state, "MPos": mpos, "WPos": effective_wpos}
 
             # --- UDP abs-Positionsbroadcast ---
             if UDP_MIRROR:
@@ -5622,6 +5794,13 @@ $Report/Startup     - Show startup file loaded at boot
             return
         self._gp_tcp_busy = True
         try:
+            # Apply per-axis inversion
+            if getattr(self, "fixed_tcp_gp_invert_x", None) and self.fixed_tcp_gp_invert_x.get():
+                dx = -dx
+            if getattr(self, "fixed_tcp_gp_invert_y", None) and self.fixed_tcp_gp_invert_y.get():
+                dy = -dy
+            if getattr(self, "fixed_tcp_gp_invert_z", None) and self.fixed_tcp_gp_invert_z.get():
+                dz = -dz
             try:
                 _lim = max(10.0, float(self.fixed_tcp_max_dist.get()))
             except Exception:

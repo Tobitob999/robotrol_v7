@@ -82,6 +82,14 @@ class PickPlaceTab(ttk.Frame):
         self._test_pitch_adapt_var = tk.BooleanVar(value=False)
         self._test_max_pitch_var = tk.DoubleVar(value=35.0)
 
+        # Pick & Place Test
+        self._ppt_from_sq_var = tk.StringVar(value="e4")
+        self._ppt_to_sq_var = tk.StringVar(value="d5")
+        self._ppt_z_grasp_var = tk.DoubleVar(value=5.0)
+        self._ppt_open_s_var = tk.IntVar(value=0)
+        self._ppt_close_s_var = tk.IntVar(value=1000)
+        self._ppt_pause_ms_var = tk.IntVar(value=500)
+
         self._base_T_board_vars = None
         self._base_T_cam_vars = None
         self._marker_T_obj_vars = None
@@ -366,6 +374,41 @@ class PickPlaceTab(ttk.Frame):
         ttk.Entry(test_frame, textvariable=self._test_max_pitch_var, width=8).grid(row=5, column=1, sticky="w", padx=4, pady=2)
         ttk.Label(test_frame, text="Use this to verify calibration/kinematics before pick.").grid(
             row=6, column=0, columnspan=2, sticky="w", padx=4, pady=(2, 4)
+        )
+
+        self._build_pick_place_test_frame(tab)
+
+    # ------------------------------------------------------------------
+    # Pick & Place Test UI
+    # ------------------------------------------------------------------
+    def _build_pick_place_test_frame(self, tab):
+        pp = ttk.LabelFrame(tab, text="Pick & Place Test")
+        pp.pack(fill="x", padx=6, pady=6)
+
+        ttk.Label(pp, text="From square:").grid(row=0, column=0, sticky="w", padx=4, pady=2)
+        ttk.Entry(pp, textvariable=self._ppt_from_sq_var, width=6).grid(row=0, column=1, sticky="w", padx=4, pady=2)
+
+        ttk.Label(pp, text="To square:").grid(row=1, column=0, sticky="w", padx=4, pady=2)
+        ttk.Entry(pp, textvariable=self._ppt_to_sq_var, width=6).grid(row=1, column=1, sticky="w", padx=4, pady=2)
+
+        ttk.Label(pp, text="Z grasp (mm):").grid(row=2, column=0, sticky="w", padx=4, pady=2)
+        ttk.Entry(pp, textvariable=self._ppt_z_grasp_var, width=8).grid(row=2, column=1, sticky="w", padx=4, pady=2)
+        ttk.Label(pp, text="(board frame, depth to grasp)").grid(row=2, column=2, sticky="w", padx=4, pady=2)
+
+        ttk.Label(pp, text="Gripper open S:").grid(row=3, column=0, sticky="w", padx=4, pady=2)
+        ttk.Entry(pp, textvariable=self._ppt_open_s_var, width=8).grid(row=3, column=1, sticky="w", padx=4, pady=2)
+
+        ttk.Label(pp, text="Gripper close S:").grid(row=4, column=0, sticky="w", padx=4, pady=2)
+        ttk.Entry(pp, textvariable=self._ppt_close_s_var, width=8).grid(row=4, column=1, sticky="w", padx=4, pady=2)
+
+        ttk.Label(pp, text="Gripper pause (ms):").grid(row=5, column=0, sticky="w", padx=4, pady=2)
+        ttk.Entry(pp, textvariable=self._ppt_pause_ms_var, width=8).grid(row=5, column=1, sticky="w", padx=4, pady=2)
+
+        ttk.Label(pp, text="Uses Z safe, Dry run, Pitch adapt from above.").grid(
+            row=6, column=0, columnspan=3, sticky="w", padx=4, pady=(2, 2)
+        )
+        ttk.Button(pp, text="Run Pick & Place", command=self._run_pick_place_test).grid(
+            row=7, column=0, columnspan=2, sticky="w", padx=4, pady=(4, 6)
         )
 
     def _build_camera_tab(self, tab):
@@ -931,6 +974,151 @@ class PickPlaceTab(ttk.Frame):
                 self._log("Board test moves complete.")
             except Exception as exc:
                 self._log(f"Board test moves failed: {exc}")
+        self._start_worker(_task)
+
+    # ------------------------------------------------------------------
+    # Pick & Place Test — motion sequence
+    # ------------------------------------------------------------------
+    def _run_pick_place_test(self):
+        def _task():
+            try:
+                # -- guard --
+                if self._execute_app is None or not hasattr(self._execute_app, "kinematics_tabs"):
+                    raise RuntimeError("Kinematics UI not available")
+                self._ensure_pipeline()
+                kt = self._execute_app.kinematics_tabs
+
+                # -- live MPos → joint hints --
+                client = getattr(self._execute_app, "client", None)
+                st = getattr(client, "last_status", None) or {}
+                mpos = st.get("MPos") or {}
+                if not mpos:
+                    raise RuntimeError(
+                        "No current machine position (MPos) available. "
+                        "Is the robot connected and homed?"
+                    )
+                kw = kt.world
+                for ax, val in mpos.items():
+                    if ax in ("A", "B", "C", "X", "Y", "Z"):
+                        kw.exec.axis_positions[ax] = float(val)
+                joints_init = kw._get_current_joint_list()
+                self._log(f"Pick & Place: live joints = {joints_init}")
+
+                # -- read parameters --
+                from_sq = self._ppt_from_sq_var.get().strip().lower()
+                to_sq   = self._ppt_to_sq_var.get().strip().lower()
+                z_safe  = float(self._test_z_safe_var.get())
+                z_grasp = float(self._ppt_z_grasp_var.get())
+                open_s  = int(self._ppt_open_s_var.get())
+                close_s = int(self._ppt_close_s_var.get())
+                pause_s = float(self._ppt_pause_ms_var.get()) / 1000.0
+                dry_run = bool(self._test_dry_run_var.get())
+                feed    = self._get_speed_slider_feed(60.0)
+
+                # -- parse squares --
+                def _sq(s):
+                    if len(s) < 2:
+                        raise RuntimeError(f"Invalid square '{s}'")
+                    f, r = s[0], s[1]
+                    if not ("a" <= f <= "h" and r.isdigit()):
+                        raise RuntimeError(f"'{s}' is not a valid square (a1..h8)")
+                    return self._board_square_center(f, int(r))
+
+                pick_x, pick_y   = _sq(from_sq)
+                place_x, place_y = _sq(to_sq)
+
+                # -- orientation (with optional pitch adaptation) --
+                roll0, pitch0, yaw0 = self._current_rpy()
+                pick_r, pick_p, pick_y_ = self._compute_approach_rpy(
+                    pick_x, pick_y, roll0, pitch0, yaw0
+                )
+                place_r, place_p, place_y_ = self._compute_approach_rpy(
+                    place_x, place_y, roll0, pitch0, yaw0
+                )
+
+                # -- compute 4 waypoints in base frame --
+                pick_safe  = self._board_to_base(pick_x,  pick_y,  z_safe)
+                pick_grasp = self._board_to_base(pick_x,  pick_y,  z_grasp)
+                place_safe = self._board_to_base(place_x, place_y, z_safe)
+                place_grasp = self._board_to_base(place_x, place_y, z_grasp)
+
+                self._log(
+                    f"Pick & Place: {from_sq}->{to_sq}  z_safe={z_safe} "
+                    f"z_grasp={z_grasp} feed={feed:.0f} dry={dry_run}"
+                )
+                self._log(f"  pick_safe  = {[f'{v:.1f}' for v in pick_safe]}")
+                self._log(f"  pick_grasp = {[f'{v:.1f}' for v in pick_grasp]}")
+                self._log(f"  place_safe = {[f'{v:.1f}' for v in place_safe]}")
+                self._log(f"  place_grasp= {[f'{v:.1f}' for v in place_grasp]}")
+
+                # -- IK preview all 4 (fail early) --
+                for label, pos, r, p, y in [
+                    ("pick_safe",   pick_safe,   pick_r,  pick_p,  pick_y_),
+                    ("pick_grasp",  pick_grasp,  pick_r,  pick_p,  pick_y_),
+                    ("place_safe",  place_safe,  place_r, place_p, place_y_),
+                    ("place_grasp", place_grasp, place_r, place_p, place_y_),
+                ]:
+                    res = kt.preview_tcp_gcode(pos[0], pos[1], pos[2], r, p, y, feed=feed)
+                    if not res or not res.get("ok", False):
+                        raise RuntimeError(f"IK preview failed for {label}: {res}")
+                    self._log(f"  IK ok [{label}]")
+
+                if dry_run:
+                    self._log("Dry run: all IK previews passed. No motion.")
+                    return
+
+                # -- helpers --
+                def _refresh():
+                    st2 = getattr(client, "last_status", None) or {}
+                    m2 = st2.get("MPos") or {}
+                    if m2:
+                        for ax, val in m2.items():
+                            if ax in ("A", "B", "C", "X", "Y", "Z"):
+                                kw.exec.axis_positions[ax] = float(val)
+                        kw._initial_joints_next = kw._get_current_joint_list()
+
+                def _move(label, pos, r, p, y):
+                    _refresh()
+                    self._log(f"  -> {label}")
+                    ok = kt.move_tcp_pose(pos[0], pos[1], pos[2], r, p, y, feed=feed)
+                    if not ok:
+                        raise RuntimeError(f"Move to {label} failed")
+                    self._wait_for_idle()
+
+                # ===== PICK =====
+                self._log("=== PICK ===")
+                _move("pick_safe", pick_safe, pick_r, pick_p, pick_y_)
+
+                self._log(f"  Gripper OPEN (M3 S{open_s})")
+                self._execute_app.send_now(f"M3 S{open_s}")
+                time.sleep(pause_s)
+
+                _move("pick_grasp", pick_grasp, pick_r, pick_p, pick_y_)
+
+                self._log(f"  Gripper CLOSE (M3 S{close_s})")
+                self._execute_app.send_now(f"M3 S{close_s}")
+                time.sleep(pause_s)
+
+                _move("pick_safe (lift)", pick_safe, pick_r, pick_p, pick_y_)
+
+                # ===== TRANSIT =====
+                self._log("=== TRANSIT ===")
+                _move("place_safe", place_safe, place_r, place_p, place_y_)
+
+                # ===== PLACE =====
+                self._log("=== PLACE ===")
+                _move("place_grasp", place_grasp, place_r, place_p, place_y_)
+
+                self._log(f"  Gripper OPEN (M3 S{open_s})")
+                self._execute_app.send_now(f"M3 S{open_s}")
+                time.sleep(pause_s)
+
+                _move("place_safe (retreat)", place_safe, place_r, place_p, place_y_)
+
+                self._log("Pick & Place complete.")
+
+            except Exception as exc:
+                self._log(f"Pick & Place failed: {exc}")
         self._start_worker(_task)
 
     def _reset_camera_calib(self):

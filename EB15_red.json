@@ -246,26 +246,19 @@
       "C"
     ],
     "post_transform": {
-      "mirror_x": true,
-      "sim_theta_offset_deg": {
-        "A": -90.0,
-        "Z": 90.0
-      },
-      "sim_theta_scale": {
-        "B": -1.0
-      }
+      "mirror_x": true
     },
     "joints": [
       {
         "name": "joint1_A",
         "axis": "A",
         "a": 0.0,
-        "alpha": 1.5707963267948966,
+        "alpha": -1.5707963267948966,
         "d": 0.076,
         "theta_offset": 0.0,
         "q_min": -3.14159265359,
         "q_max": 3.14159265359,
-        "source_note": "EB15 upright sim/base orientation: alpha=+90deg, d=L1, a=0."
+        "source_note": "Set per provided DH table: theta=0, alpha=+90deg, d=L1, a=0."
       },
       {
         "name": "joint2_X",
@@ -276,7 +269,7 @@
         "theta_offset": 1.5707963267948966,
         "q_min": -3.14159265359,
         "q_max": 3.14159265359,
-        "source_note": "EB15 upright sim/base orientation: theta_offset=+90deg, alpha=0, d=0, a=L2."
+        "source_note": "Set per provided DH table: theta=+90deg, alpha=0, d=0, a=L2."
       },
       {
         "name": "joint3_Y",
@@ -287,21 +280,21 @@
         "theta_offset": 0.0,
         "q_min": -3.14159265359,
         "q_max": 3.14159265359,
-        "source_note": "EB15 upright sim/base orientation: shoulder/elbow geometry row."
+        "source_note": "Set per provided DH table: theta=-90deg, alpha=-90deg, d=0, a=0."
       },
       {
-        "name": "joint4_Z",
+        "name": "joint5_Z",
         "axis": "Z",
         "a": 0.0,
-        "alpha": 1.5707963267948966,
+        "alpha": -1.5707963267948966,
         "d": 0.085,
         "theta_offset": 0.0,
         "q_min": -3.14159265359,
         "q_max": 3.14159265359,
-        "source_note": "EB15 upright sim/base orientation: joint order A X Y Z B C, wrist pitch Z."
+        "source_note": "Set per provided DH table: theta=0, alpha=-90deg, d=0, a=0."
       },
       {
-        "name": "joint5_B",
+        "name": "joint4_B",
         "axis": "B",
         "a": 0.0,
         "alpha": 1.5707963267948966,
@@ -309,7 +302,7 @@
         "theta_offset": 0.0,
         "q_min": -3.14159265359,
         "q_max": 3.14159265359,
-        "source_note": "EB15 axis remap: joint order is A X Y Z B C (this row is wrist roll B)."
+        "source_note": "Set per provided DH table: theta=0, alpha=+90deg, d=L3, a=0."
       },
       {
         "name": "joint6_C",
@@ -336,5 +329,20 @@
       "C": -14.432
     },
     "timestamp": 1771513120.2884324
+  },
+  "kinematics_settings": {
+    "kinematics": {
+      "D_ret": 20.0,
+      "D_work": 30.0,
+      "feed": 3000.0,
+      "pitch_override": 0.0,
+      "roll_override": 0.0,
+      "invert_u": false,
+      "anchor_mode": "retreat",
+      "use_gripper": false,
+      "grip_s": 1000,
+      "grip_pause_before_ms": 0,
+      "grip_pause_after_ms": 0
+    }
   }
 }

@@ -406,6 +406,15 @@ class TcpKinematicsFrame(ttk.Frame):
             btn_frame, text="Send to Queue", command=self._send_preview_to_queue
         ).pack(side=tk.LEFT, padx=5)
 
+        ttk.Separator(btn_frame, orient="vertical").pack(side=tk.LEFT, fill="y", padx=8, pady=2)
+
+        ttk.Button(btn_frame, text="Save Settings", command=self._save_settings_to_profile).pack(
+            side=tk.LEFT, padx=5
+        )
+        ttk.Button(btn_frame, text="Load Settings", command=self._load_settings_from_profile).pack(
+            side=tk.LEFT, padx=5
+        )
+
         # =========================================================
         # PREVIEW
         # =========================================================
@@ -799,6 +808,81 @@ class TcpKinematicsFrame(ttk.Frame):
                     "axis_positions may be stale or MPos not yet received."
                 )
         return joints
+
+    # =========================================================
+    # SAVE / LOAD SETTINGS (Parameters + Gripper Sequence)
+    # =========================================================
+    def get_settings(self):
+        """Return a dict of all saveable kinematics tab settings."""
+        return {
+            "D_ret": self.D_ret.get(),
+            "D_work": self.D_work.get(),
+            "feed": self.feed.get(),
+            "pitch_override": self.pitch_override.get(),
+            "roll_override": self.roll_override.get(),
+            "invert_u": self.invert_u.get(),
+            "anchor_mode": self.anchor_mode.get(),
+            "use_gripper": self.use_gripper.get(),
+            "grip_s": self.grip_s.get(),
+            "grip_pause_before_ms": self.grip_pause_before_ms.get(),
+            "grip_pause_after_ms": self.grip_pause_after_ms.get(),
+        }
+
+    def apply_settings(self, data):
+        """Restore kinematics tab settings from a dict."""
+        if not isinstance(data, dict):
+            return
+        def _set(var, key, conv=float):
+            if key in data:
+                try:
+                    var.set(conv(data[key]))
+                except Exception:
+                    pass
+        _set(self.D_ret, "D_ret")
+        _set(self.D_work, "D_work")
+        _set(self.feed, "feed")
+        _set(self.pitch_override, "pitch_override")
+        _set(self.roll_override, "roll_override")
+        _set(self.invert_u, "invert_u", bool)
+        if "anchor_mode" in data:
+            self.anchor_mode.set(str(data["anchor_mode"]))
+        _set(self.use_gripper, "use_gripper", bool)
+        _set(self.grip_s, "grip_s", int)
+        _set(self.grip_pause_before_ms, "grip_pause_before_ms", int)
+        _set(self.grip_pause_after_ms, "grip_pause_after_ms", int)
+
+    def _save_settings_to_profile(self):
+        """Save Parameters + Gripper + Fixed TCP settings to the active profile."""
+        if hasattr(self.exec, "save_all_kinematics_settings"):
+            self.exec.save_all_kinematics_settings()
+        elif hasattr(self.exec, "set_profile_section"):
+            payload = {"kinematics": self.get_settings()}
+            self.exec.set_profile_section("kinematics_settings", payload, save=True)
+            if hasattr(self.exec, "log"):
+                self.exec.log("Kinematics settings saved to profile.")
+        else:
+            if hasattr(self.exec, "log"):
+                self.exec.log("Cannot save: profile API not available.")
+
+    def _load_settings_from_profile(self):
+        """Load Parameters + Gripper + Fixed TCP settings from the active profile."""
+        if hasattr(self.exec, "load_all_kinematics_settings"):
+            self.exec.load_all_kinematics_settings()
+            if hasattr(self.exec, "log"):
+                self.exec.log("All kinematics settings loaded from profile.")
+        elif hasattr(self.exec, "get_profile_section"):
+            data = self.exec.get_profile_section("kinematics_settings", default=None)
+            if isinstance(data, dict):
+                kin = data.get("kinematics", data)
+                self.apply_settings(kin)
+                if hasattr(self.exec, "log"):
+                    self.exec.log("Kinematics settings loaded from profile.")
+            else:
+                if hasattr(self.exec, "log"):
+                    self.exec.log("No kinematics settings found in profile.")
+        else:
+            if hasattr(self.exec, "log"):
+                self.exec.log("Cannot load: profile API not available.")
 
     def _save_dh_to_json(self):
         """Persist DH parameters (deg/mm) into the active profile."""
@@ -1661,7 +1745,14 @@ class TcpWorldKinematicsTabs(ttk.Frame):
             )
         return None
 
+    def get_settings(self):
+        if hasattr(self.world, "get_settings"):
+            return self.world.get_settings()
+        return {}
 
+    def apply_settings(self, data):
+        if hasattr(self.world, "apply_settings"):
+            self.world.apply_settings(data)
 
 
 __all__ = [
