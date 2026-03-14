@@ -1,0 +1,13 @@
+﻿{
+  "frames": {
+    "base": "base",
+    "camera": "cam",
+    "object": "obj",
+    "tcp": "tcp",
+    "gripper": "gripper"
+  },
+  "state_machine": {
+    "start_state": "IDLE",
+    "success_target": 10
+  }
+}

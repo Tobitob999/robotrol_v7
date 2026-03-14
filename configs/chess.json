@@ -1,0 +1,24 @@
+{
+  "board": {
+    "pattern_size": [
+      7,
+      7
+    ],
+    "square_size_px": 60,
+    "board_size_squares": 8,
+    "white_bottom": true
+  },
+  "piece_detection": {
+    "occupancy_threshold": 18.0,
+    "min_piece_ratio": 0.08,
+    "max_piece_ratio": 0.6,
+    "piece_mode": "tnt",
+    "light_piece_char": "P",
+    "dark_piece_char": "p",
+    "templates": {},
+    "template_threshold": 0.55
+  },
+  "debug": {
+    "save_warp_path": "data/chess_warp.png"
+  }
+}

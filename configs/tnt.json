@@ -1,0 +1,15 @@
+﻿{
+  "edge_length_mm": 25.25,
+  "face_offset_mm": 12.625,
+  "min_area_px": 300,
+  "color_order": "rgb",
+  "hsv_red_ranges": [
+    [0, 40, 30, 12, 255, 255],
+    [168, 40, 30, 180, 255, 255]
+  ],
+  "morph_kernel": 3,
+  "debug_save": true,
+  "debug_input_path": "data/tnt_input.png",
+  "debug_mask_path": "data/tnt_mask.png",
+  "debug_contour_path": "data/tnt_contours.png"
+}

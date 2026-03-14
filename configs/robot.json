@@ -1,0 +1,20 @@
+﻿{
+  "cartesian_speed": 100.0,
+  "approach_speed": 60.0,
+  "grasp_speed": 30.0,
+  "lift_speed": 80.0,
+  "place_speed": 40.0,
+  "retract_speed": 80.0,
+  "workspace": {
+    "enabled": false,
+    "margin_mm": 10.0,
+    "x": [-250.0, 250.0],
+    "y": [-250.0, 250.0],
+    "z": [-50.0, 300.0]
+  },
+  "gripper": {
+    "close_force": 1.0,
+    "mock_grasped": true
+  },
+  "robot_mode": "mock"
+}

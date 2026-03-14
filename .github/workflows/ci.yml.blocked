@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy opencv-python pillow pyserial pygame pyyaml
+
+      - name: Compile Python files
+        run: |
+          python -m py_compile \
+            Robotrol_FluidNC_v7_0.py \
+            board_pose_v1.py \
+            camera_capturev_v1_1.py \
+            fluidnc_updater_v2.py \
+            gamepad_block_v3.py \
+            ik_rotosim.py \
+            pickplace_ui.py \
+            robosim_visualizer_v90.py \
+            tcp_pose_module_v3.py \
+            tcp_world_kinematics_frame.py \
+            control/config.py \
+            tools/check_english_text.py \
+            tools/smoke_checks.py
+
+      - name: Run smoke checks
+        run: python tools/smoke_checks.py

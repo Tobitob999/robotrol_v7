@@ -1,0 +1,50 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/c/Users/Tobia/AppData/Local/Programs/Python/Python313/python -m py_compile tcp_world_kinematics_frame.py)",
+      "Bash(/c/Users/Tobia/AppData/Local/Programs/Python/Python313/python -m py_compile Robotrol_FluidNC_v7_3.py)",
+      "Bash(python -m py_compile Robotrol_FluidNC_v7_3.py)",
+      "Bash(python -c \":*)",
+      "Bash(start pythonw Robotrol_FluidNC_v7_3.py)",
+      "Bash(xargs wc -l)",
+      "Bash(/c/Users/Tobia/AppData/Local/Programs/Python/Python313/python -m py_compile core/session_config.py)",
+      "Bash(/c/Users/Tobia/AppData/Local/Programs/Python/Python313/python -m py_compile main.py)",
+      "Bash(/c/Users/Tobia/AppData/Local/Programs/Python/Python313/python -m py_compile core/engine.py)",
+      "Bash(/c/Users/Tobia/AppData/Local/Programs/Python/Python313/python -m py_compile core/ai_backend.py)",
+      "Bash(test -f \"/g/Meine Ablage/ARS/core/session_config.py\")",
+      "Bash(/c/Users/Tobia/AppData/Local/Programs/Python/Python313/python -m py_compile scripts/tech_gui.py)",
+      "Bash(/c/Users/Tobia/AppData/Local/Programs/Python/Python313/python -c \":*)",
+      "Bash(start pythonw scripts/tech_gui.py)",
+      "Bash(file data/lore/add_2e/monsters/*.json)",
+      "Bash(python3 -m json.tool data/lore/add_2e/index.json)",
+      "Bash(python3 -m json.tool modules/presets/add_demo.json)",
+      "Bash(python3 -c \"import json; json.load\\(open\\(''data/lore/add_2e/monsters/goblin.json'', encoding=''utf-8-sig''\\)\\)\")",
+      "Bash(node -e \"const fs = require\\(''fs''\\); try { JSON.parse\\(fs.readFileSync\\(''data/lore/add_2e/index.json'', ''utf8''\\)\\); console.log\\(''INDEX: Valid''\\); } catch\\(e\\) { console.log\\(''INDEX Error: '' + e.message\\); }\")",
+      "Bash(node -e \"const fs = require\\(''fs''\\); try { JSON.parse\\(fs.readFileSync\\(''modules/presets/add_demo.json'', ''utf8''\\)\\); console.log\\(''DEMO: Valid''\\); } catch\\(e\\) { console.log\\(''DEMO Error: '' + e.message\\); }\")",
+      "Bash(node -e \"const fs = require\\(''fs''\\); try { JSON.parse\\(fs.readFileSync\\(''modules/presets/add_fantasy.json'', ''utf8''\\)\\); console.log\\(''FANTASY: Valid''\\); } catch\\(e\\) { console.log\\(''FANTASY Error: '' + e.message\\); }\")",
+      "Bash(node -e \"const fs = require\\(''fs''\\); try { JSON.parse\\(fs.readFileSync\\(''data/lore/add_2e/monsters/goblin.json'', ''utf8''\\)\\); console.log\\(''goblin.json: Valid''\\); } catch\\(e\\) { console.log\\(''goblin.json Error: '' + e.message\\); }\")",
+      "Bash(node -e \"const fs = require\\(''fs''\\); try { JSON.parse\\(fs.readFileSync\\(''modules/rulesets/add_2e.json'', ''utf8''\\)\\); console.log\\(''add_2e.json: Valid''\\); } catch\\(e\\) { console.log\\(''add_2e.json Error: '' + e.message\\); }\")",
+      "Bash(node -e \"const fs = require\\(''fs''\\); try { JSON.parse\\(fs.readFileSync\\(''modules/adventures/goblin_cave.json'', ''utf8''\\)\\); console.log\\(''goblin_cave.json: Valid''\\); } catch\\(e\\) { console.log\\(''goblin_cave.json Error: '' + e.message\\); }\")",
+      "Bash(for f in data/lore/add_2e/loot/*.json)",
+      "Bash(do node -e \"try { JSON.parse\\(require\\(''fs''\\).readFileSync\\(''$f'', ''utf8''\\)\\); } catch\\(e\\) { console.log\\(''INVALID: $f''\\); }\")",
+      "Bash(done)",
+      "Bash(for f in data/lore/add_2e/encounters/*.json)",
+      "Bash(find data/lore/add_2e -name \"*.json\" -exec file {} ;)",
+      "Bash(find data/lore/add_2e -name \"*.json\" -exec sed -i 's/^\\\\xEF\\\\xBB\\\\xBF//' {} ;)",
+      "Bash(/c/Users/Tobia/AppData/Local/Programs/Python/Python313/python -m py_compile core/orchestrator.py)",
+      "Bash(/c/Users/Tobia/AppData/Local/Programs/Python/Python313/python -m py_compile core/character.py)",
+      "Bash(/c/Users/Tobia/AppData/Local/Programs/Python/Python313/python -m py_compile audio/tag_filter.py)",
+      "Bash(/c/Users/Tobia/AppData/Local/Programs/Python/Python313/python -m py_compile core/discovery.py)",
+      "Bash(find \"G:/Meine Ablage/ARS/data/lore\" -type f \\\\\\( -name \"*.json\" -o -name \"*.md\" \\\\\\) -not -path \"*/tasks/*\" -not -path \"*/cthulhu/*\" -not -path \"*/archive/*\" -exec wc -c {} +)",
+      "Bash(find \"G:/Meine Ablage/ARS/data/lore\" -type f -name \"*.json\" -not -path \"*/tasks/*\" -not -path \"*/cthulhu/*\" -not -path \"*/archive/*\" -exec wc -c {} +)",
+      "Bash(/c/Users/Tobia/AppData/Local/Programs/Python/Python313/python -c \"import json; json.load\\(open\\(''modules/keepers/arkane_archivar.json'', encoding=''utf-8''\\)\\); print\\(''arkane_archivar.json OK''\\)\")",
+      "Bash(/c/Users/Tobia/AppData/Local/Programs/Python/Python313/python -c \"import json; json.load\\(open\\(''modules/keepers/epischer_barde.json'', encoding=''utf-8''\\)\\); print\\(''epischer_barde.json OK''\\)\")",
+      "WebFetch(domain:wiki.fluidnc.com)"
+    ],
+    "additionalDirectories": [
+      "G:\\Meine Ablage\\ARS\\core",
+      "G:\\Meine Ablage\\ARS\\modules",
+      "G:\\Meine Ablage\\ARS"
+    ]
+  }
+}

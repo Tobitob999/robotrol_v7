@@ -1,0 +1,5 @@
+{
+  "language": "en",
+  "enforce_english_text": true,
+  "language_migration_policy": "low_priority_incremental"
+}
