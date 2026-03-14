@@ -495,7 +495,7 @@ class VisualizerApp(ttk.Frame):
                 d.pop("timestamp")
             clean = json.dumps(d)
             self.udp_recv_var.set(f"UDP: {clean}")
-        except:
+        except (json.JSONDecodeError, KeyError, TypeError):
             self.udp_recv_var.set(f"UDP: {line}")
         try:
             data = json.loads(line)

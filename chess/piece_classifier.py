@@ -1,4 +1,4 @@
-﻿import os
+import os
 
 
 _TEMPLATE_CACHE = {}

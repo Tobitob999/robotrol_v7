@@ -1,4 +1,4 @@
-﻿import os
+import os
 
 from control.config import load_all_configs
 from control.pipeline import PickPlacePipeline

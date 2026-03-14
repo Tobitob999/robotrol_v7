@@ -632,7 +632,7 @@ class FluidNCUpdaterFrame(ttk.Frame):
                 resp = self.client.command(cmd)
                 if "ok" in resp.lower() or "restart" in resp.lower():
                     return True
-            except:
+            except Exception:
                 continue
         return False
 

@@ -1,4 +1,4 @@
-﻿import math
+import math
 
 from perception.types import ObjectPose
 from perception.marker_detector import ArucoMarkerDetector

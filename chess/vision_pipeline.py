@@ -1,4 +1,4 @@
-﻿import json
+import json
 import os
 
 from chess.board_detector import detect_board
@@ -49,7 +49,4 @@ def detect_chess_state(image, config: dict, color_order: str = "rgb"):
     return state, detection
 
 
-def load_config(base_dir: str):
-    path = os.path.join(base_dir, "configs", "chess.json")
-    with open(path, "r", encoding="utf-8-sig") as f:
-        return json.loads(f.read())
+from chess.config import load_config  # re-export for backwards compat

@@ -1,4 +1,4 @@
-﻿class RobotInterface:
+class RobotInterface:
     def move_cartesian(self, pose, speed: float):
         raise NotImplementedError
 

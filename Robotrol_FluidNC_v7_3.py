@@ -381,7 +381,7 @@ class SerialClient:
             if self.ser and self.ser.is_open:
                 try:
                     self.ser.close()
-                except:
+                except Exception:
                     pass
 
             # --------------------------
@@ -3613,7 +3613,7 @@ $Report/Startup     - Show startup file loaded at boot
         def clamp_with_limits(ax, v):
             try:
                 val = float(v)
-            except:
+            except (ValueError, TypeError):
                 val = 0.0
             lo, hi = self._effective_axis_limits(ax)
             return max(lo, min(hi, val))
@@ -3805,7 +3805,7 @@ $Report/Startup     - Show startup file loaded at boot
             def _get(ax=ax, ent=ent, var=var):
                 try:
                     v = float(ent.get().replace(",", "."))
-                except:
+                except (ValueError, TypeError):
                     v = var.get()
                 v = clamp_with_limits(ax, v)
                 ent.delete(0, tk.END)
@@ -3886,7 +3886,7 @@ $Report/Startup     - Show startup file loaded at boot
                         continue
                     try:
                         v = float(ent2.get().replace(",", "."))
-                    except:
+                    except (ValueError, TypeError):
                         v = self.axis_vars[ax2].get()
 
                     lo2, hi2 = self._effective_axis_limits(ax2)
@@ -4195,7 +4195,7 @@ $Report/Startup     - Show startup file loaded at boot
         # Enable panel (start update loop)
         try:
             self.tcp_panel.start()
-        except:
+        except Exception:
             pass
 
         # ---- Set All Buttons ----
@@ -4381,7 +4381,7 @@ $Report/Startup     - Show startup file loaded at boot
     def get_current_tcp_mm(self):
         try:
             return self.tcp_panel.get_current_tcp_mm()
-        except:
+        except Exception:
             return {"X_mm":0,"Y_mm":0,"Z_mm":0,"Roll_deg":0,"Pitch_deg":0,"Yaw_deg":0}
 
     def set_gamepad_config_ui(self, ui):
@@ -5625,7 +5625,7 @@ $Report/Startup     - Show startup file loaded at boot
                     self.hw_limits[ax] = (0.0, max_travel)
                     if ax in self.axis_limit_labels:
                         self.axis_limit_labels[ax].config(text=f"[0..{max_travel:.0f}]")
-                except:
+                except (ValueError, TypeError):
                     pass
 
 
@@ -6078,7 +6078,7 @@ def on_close():
         if hasattr(execute_app, "tcp_panel"):
             try:
                 execute_app.tcp_panel.stop()
-            except:
+            except Exception:
                 pass
 
         # Gamepad stoppen

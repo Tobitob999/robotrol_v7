@@ -1,4 +1,4 @@
-﻿from control.transforms import (
+from control.transforms import (
     make_transform,
     extract_translation,
     extract_rotation,

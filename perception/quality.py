@@ -1,4 +1,4 @@
-﻿def reprojection_error(object_points, image_points, rvec, tvec, camera_matrix, dist_coeffs):
+def reprojection_error(object_points, image_points, rvec, tvec, camera_matrix, dist_coeffs):
     try:
         import cv2
         import numpy as np

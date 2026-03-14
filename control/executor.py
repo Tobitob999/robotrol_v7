@@ -1,4 +1,4 @@
-﻿from control.errors import ControlError
+from control.errors import ControlError
 
 
 class TrajectoryExecutor:

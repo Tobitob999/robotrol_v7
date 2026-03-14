@@ -1,4 +1,4 @@
-﻿from control.transforms import make_transform
+from control.transforms import make_transform
 from planning.types import PlacePlan
 
 

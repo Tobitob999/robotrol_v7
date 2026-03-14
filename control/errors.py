@@ -1,4 +1,4 @@
-﻿class PickPlaceError(Exception):
+class PickPlaceError(Exception):
     pass
 
 

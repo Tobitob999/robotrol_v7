@@ -1,4 +1,4 @@
-﻿from control.transforms import make_transform, rotation_matrix_from_quaternion
+from control.transforms import make_transform, rotation_matrix_from_quaternion
 
 
 class MockWorld:

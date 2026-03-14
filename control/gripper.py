@@ -1,4 +1,4 @@
-﻿class GripperInterface:
+class GripperInterface:
     def open(self):
         raise NotImplementedError
 

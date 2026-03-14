@@ -1,4 +1,4 @@
-﻿from chess.types import PieceDetection
+from chess.types import PieceDetection
 from chess.piece_classifier import classify_piece
 
 

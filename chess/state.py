@@ -1,4 +1,4 @@
-﻿from chess.types import ChessState
+from chess.types import ChessState
 
 
 def board_to_fen(board, white_bottom: bool = True):
